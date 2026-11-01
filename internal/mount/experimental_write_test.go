@@ -493,8 +493,10 @@ func TestExperimentalDeleteOperationsAreUnsupported(t *testing.T) {
 	if got := n.Rmdir(context.Background(), "dir"); got != syscall.EOPNOTSUPP {
 		t.Fatalf("rmdir: %v", got)
 	}
-	if got := n.Rename(context.Background(), "file", n, "other", 0); got != syscall.EOPNOTSUPP {
-		t.Fatalf("rename: %v", got)
+	for _, flags := range []uint32{0, 1, 2, 4} { // ordinary, NOREPLACE, EXCHANGE, and an unknown flag
+		if got := n.Rename(context.Background(), "file", n, "other", flags); got != syscall.EOPNOTSUPP {
+			t.Errorf("rename flags %#x: %v", flags, got)
+		}
 	}
 }
 

@@ -35,7 +35,7 @@ Oracle AI Data Platform (AIDP) Workbench の workspace をローカルから操�
 
 ### 5. 書き込み FUSE
 
-- [ ] **rename**: 既存先の置換、`RENAME_NOREPLACE`/`RENAME_EXCHANGE`、異なるディレクトリ間、open/dirty source・destination、inode の寿命を検証する。atomicity を保証できない場合は非対応または制限を明示し、非原子的な処理を原子的成功として返さない。
+- [x] **rename**: 2026-11-02、既存先 rename は実 AIDP で 409 となり双方保持、不正 `if-match` の rename は 200 で移動したが原子性・競合保護を示さなかった。FUSE は通常 rename、`RENAME_NOREPLACE`、`RENAME_EXCHANGE`、未知 flag を一律 `EOPNOTSUPP` とし、dirty source の内容を保持する実 mount test に成功。別ディレクトリ・dirty destination・inode寿命は remote rename 自体が無効のため公開操作としては未対応。[契約](README.md)、[実測](docs/20261101_書き込みAPI実測.md)、[test](internal/mount/experimental_write_test.go)。
 - [ ] **保存と復旧**: dirty buffer と同一ファイルへの並列操作を設計し、flush の複数回/未呼出、fsync、release、shutdown、通信断・競合時の保持と復旧をテストする。release のエラーは close に返らないことを前提に、利用者が失敗を検出・回復できる手段を実装する。`fsync` に安易に `ENOSYS` を返さない。
 - [ ] **互換操作**: `chmod`/`chown`、時刻変更、`statfs`、open 後 unlink、forget、locks、非対応 flags の動作を定義し、成功/no-op/errno を明示する。分散 lock をサポートすると未検証のまま主張しない。
 - [ ] **容量と障害**: 大きなファイルのメモリ・一時ファイル容量、転送中断、プロセス終了、ローカルディスク不足、再起動後の recovery を検証する。
