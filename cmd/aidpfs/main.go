@@ -70,26 +70,12 @@ func run() error {
 		defer lock.Close()
 		journal = store
 		fmt.Fprintln(os.Stderr, "WARNING: experimental writes are incomplete; use isolated test data only. Recovery entries must be reviewed manually.")
-		journalCreate := func(ctx context.Context, rel, kind string, create func(context.Context, string) error) error {
-			remote, resolveErr := config.Resolve(c.RemotePath, rel)
-			if resolveErr != nil {
-				return resolveErr
-			}
-			intentID, intentErr := store.BeginCreateKind(c.PlatformID, c.WorkspaceKey, remote, kind)
-			if intentErr != nil {
-				return intentErr
-			}
-			if createErr := create(ctx, rel); createErr != nil {
-				return createErr
-			}
-			return store.ConfirmCreate(intentID)
-		}
 		experimental, err = mount.MountExperimental(context.Background(), c.MountPoint, r, func(ctx context.Context, rel string) (*writeback.Buffer, error) {
 			return r.OpenExperimentalBuffer(ctx, rel, c.Region, store)
 		}, func(ctx context.Context, rel string) error {
-			return journalCreate(ctx, rel, "FILE", r.CreateEmptyExperimental)
+			return journalCreate(ctx, store, c, rel, "FILE", r.CreateEmptyExperimental)
 		}, func(ctx context.Context, rel string) error {
-			return journalCreate(ctx, rel, "FOLDER", r.CreateDirectoryExperimental)
+			return journalCreate(ctx, store, c, rel, "FOLDER", r.CreateDirectoryExperimental)
 		})
 		if err == nil {
 			server = experimental.Server
@@ -109,6 +95,21 @@ func run() error {
 		return checkRecoveryAfterUnmount(experimental.Pending(), journal)
 	}
 	return nil
+}
+
+func journalCreate(ctx context.Context, store *recovery.Store, c config.Config, rel, kind string, create func(context.Context, string) error) error {
+	remote, err := config.Resolve(c.RemotePath, rel)
+	if err != nil {
+		return err
+	}
+	intentID, err := store.BeginCreateKind(c.PlatformID, c.WorkspaceKey, remote, kind)
+	if err != nil {
+		return err
+	}
+	if err = create(ctx, rel); err != nil {
+		return err
+	}
+	return store.ConfirmCreate(intentID)
 }
 
 type mountServer interface {
