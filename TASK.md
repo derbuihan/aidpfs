@@ -9,64 +9,64 @@ Oracle AI Data Platform (AIDP) Workbench の workspace をローカルから操�
 
 ---
 
-## 未対応
+## 実装と検証の状況
 
 ### 1. 実環境・読み取り API 調査
 
 - [x] **環境**: 2026-11-02 の現在の実行環境で Ubuntu 26.04.1、Linux 7.0.0-42-generic、Go 1.26.8、`/dev/fuse` の mode 0666・読み書き可能、`fusermount3` を確認。2026-11-01 の実 AIDP read-only mount / unmount 記録も照合。Docker daemon は不要なため確認対象外。隔離された別実行環境では `/dev/fuse` が見えなかった記録と分けて記載。[詳細](docs/20261101_端末環境と調査元.md)。
 - [x] **接続**: 2026-11-02、OCI API key profile `OCI_TOKYO` / `ap-osaka-1` / `https://aidp.ap-osaka-1.oci.oraclecloud.com` で対象 platform `aidp-sandbox` と workspace `sandbox` が ACTIVE であることを control-plane / workspace API から別々に確認。workspace key で署名付き objects と既存 FILE・NOTEBOOK contents GET が成功し、読み取り権限を実証。ID/key は記録せず。[詳細](docs/20261101_実APIと実装着手.md)。
-- [ ] **一覧**: `GET /objects` の root・指定 path・直接の子・空ディレクトリ・非ファイル object・権限による結果を確認し、`opc-next-page` を使って複数ページを最後まで取得する。
-- [ ] **境界**: 日本語・空白・`%`・`#`・階層区切り、root、長い名前、存在しない path、権限不足、失効した認証、429/5xx を検証できる範囲で確認する。結果には日時・操作・status・request ID・未確認事項を残す。
-- [ ] **転送経路**: contents と `downloadFileMeta`/PAR の対象種別、実際の取得手順、期限、サイズ制限、アクセス権を調査する。POST の副作用や追加権限も確認し、読み取りと決めつけない。
+- [x] **一覧**: 2026-11-02、OCI API key signer で root・`/Workspace`・4階層の path を全ページ列挙。`opc-next-page` が示す空の最終 page まで追跡し、FOLDER/FILE/NOTEBOOK、直接の子と empty FOLDER を確認。現在の principal の権限で 200 を確認し、別 IAM principal の差は発生させていない。[調査](docs/20261101_実APIと実装着手.md)。
+- [x] **境界**: 2026-11-02、root/path/missing、特殊文字の API mock と実書込、失効・401/403・429/5xx の mock、1100文字 path の実 `objects` GET (200 + empty) を確認。200 empty は存在の証拠とせず親 listing を使う。実 IAM 権限差・失効 identity・実429/5xxは検証環境なし。各 request ID / status / 未確認事項を private docs に記録。[調査](docs/20261101_実APIと実装着手.md)、[status mapping](docs/20261101_読み取り再試行と安全性.md)。
+- [x] **転送経路**: 2026-11-02、contents と `downloadFileMeta`/PAR の FILE / NOTEBOOK download を確認し、FILE・NOTEBOOK upload PAR も 7 byte / synthetic JSON で転送から UPDATE と再 GET まで成功。PAR生成POSTは副作用、署名なしObject Storage転送、現在のprincipalの許可を確認。応答にexpiry fieldはなく、Oracle仕様上 “short living” だが実TTL・server max size・別権限での結果は未確認。アプリの64 MiB上限とこの境界を記載。[実測](docs/20261101_書き込みAPI実測.md)、[scope](docs/20261102_完了判定とスコープ.md)。
 
 ### 2. 基盤・backend
 
-- [ ] **秘密情報**: 署名ヘッダー、鍵、PAR URL と query、取得内容をログ・エラー・テスト成果物に出さない。PAR 取得先への認証ヘッダー転送、redirect、期限切れを検証する。
+- [x] **秘密情報**: 2026-11-02、署名 / URL / contents を成果物に含めない実API probe、API/PAR mock redaction、PAR transfer で認証 header/cookie 非転送、redirect 拒否、401 (expiry 模擬) のEACCES・非再試行を確認。AIDPの生成応答はexpiry fieldなし、実URLが期限切れになる時刻は測定していない。通常のエラーはstatusのみ。実証範囲と限界を記録。[tests](internal/aidp/par_test.go)、[調査](docs/20261101_読み取り再試行と安全性.md)、[AIDP scope](docs/20261102_完了判定とスコープ.md)。
 
 ### 3. 読み取り専用 FUSE
 
 
 ### 4. 書き込み API と仕様の実測
 
-- [ ] **操作対応**: WorkspaceObject と notebook contents/PAR それぞれの create、update、mkdir、rename/move、上書き、delete を通常ファイルと notebook で実測する。Notebook POST は無題作成と説明されるため、指定名での create に必要な手順を確認する。
-- [ ] **競合と整合性**: GET と更新時の ETag、`if-match`、`compositeEtag` の互換性、複数 client の同時更新、外部変更、曖昧な timeout 後の状態を確認する。各操作の atomicity と非空ディレクトリの削除挙動を記録する。
-- [ ] **転送**: upload PAR の取得から転送・完了までの手順、サイズ上限、期限、失敗後の残存物、上書き時の条件付き保護と再試行を確認する。
-- [ ] **notebook**: 読取→保存の往復で cells・metadata・outputs・名前・サイズがどう保持されるか、Workbench の自動保存との競合、UI と REST export の違いを確認する。
+- [x] **操作対応**: 2026-11-02、WorkspaceObject / contents / PAR の FILE・NOTEBOOK create/update/overwrite/delete、FOLDER mkdir、contents PATCH / `renameObject` の rename を合成 data で実測。`moveObject` はFILE/NOTEBOOKとも400、Notebook POSTの指定名はその下に Untitled を作る。FUSE契約では危険なmove/deleteを拒否し、指定名Notebookは安全経路を選ぶ。[実測](docs/20261101_書き込みAPI実測.md)、[scope](docs/20261102_完了判定とスコープ.md)。
+- [x] **競合と整合性**: 2026-11-02、contents/WorkspaceObject GETにETag・compositeEtagが無い例、誤 `if-match` を受理したPUT/rename/delete、PAR 2 client 条件付きPUTの片方412、Workbench外部更新/stale fsync、timeout後のunknown journal、非空directory deleteを実測。atomic move/deleteは信用できないためFUSEでは拒否。unknown outcomeは再送せずjournal/manual inspectとする。[実測](docs/20261101_書き込みAPI実測.md)、[recovery](docs/20261101_復旧データ基盤.md)。
+- [x] **転送**: 2026-11-02、FILE upload PAR 取得→署名無しPUT→ETag付きUPDATE→GETを検証。小サイズ、失敗/重複/overwrite、再試行制御、journalをmock/liveで確認。現在の製品上限は64 MiB、AIDP側最大容量・実PAR expiryは不明。unknown writeは非再試行、REFRESH/conditional updateのみ採用。[実測](docs/20261101_書き込みAPI実測.md)、[README](README.md)。
+- [x] **notebook**: 2026-11-02、REST synthetic notebook PUT/GET/read-save-read、rich cells/metadata/output差、PAR差、Workbench UI未実行cellの保存・rename・再openとsigned GET一致を検証。`size=null` / ETagなし。UIの2分auto-save競合・既存notebook全metadata保持・REST exportの同一性は未保証としNotebook write-openを非対応にした。[実測](docs/20261101_書き込みAPI実測.md)、[scope](docs/20261102_完了判定とスコープ.md)。
 
 ### 5. 書き込み FUSE
 
 - [x] **rename**: 2026-11-02、既存先 rename は実 AIDP で 409 となり双方保持、不正 `if-match` の rename は 200 で移動したが原子性・競合保護を示さなかった。FUSE は通常 rename、`RENAME_NOREPLACE`、`RENAME_EXCHANGE`、未知 flag を一律 `EOPNOTSUPP` とし、dirty source の内容を保持する実 mount test に成功。別ディレクトリ・dirty destination・inode寿命は remote rename 自体が無効のため公開操作としては未対応。[契約](README.md)、[実測](docs/20261101_書き込みAPI実測.md)、[test](internal/mount/experimental_write_test.go)。
-- [ ] **保存と復旧**: dirty buffer と同一ファイルへの並列操作を設計し、flush の複数回/未呼出、fsync、release、shutdown、通信断・競合時の保持と復旧をテストする。release のエラーは close に返らないことを前提に、利用者が失敗を検出・回復できる手段を実装する。`fsync` に安易に `ENOSYS` を返さない。
+- [x] **保存と復旧**: 2026-11-02、dirty共有buffer、複数flush/fsync、close/release、shutdown drain、通信断・競合時のjournal保持、create intent、lineage/inspect/export、CLI異常終了をfake・実FUSE・実AIDPで検証。dirty dataはfreezeし自動再送しない。`fsync`/flushで同期結果を返し、shutdown終了コードとrecoveryコマンドで確認可能。真の電源断/物理disk failureやin-flight実AIDP停止は未保証。[復旧試験](docs/20261101_復旧データ基盤.md)、[README](README.md)。
 - [x] **互換操作**: 2026-11-02、read-only mount は属性更新を `EROFS`、experimental mount は `EOPNOTSUPP`、`statfs`・unlink・rmdir・rename は `EOPNOTSUPP` と定義。open 後 unlink も拒否し path / handle を保持、POSIX lock は kernel 内のみ。`forget` は FUSE inode reference の内部 bookkeeping のみで remote に副作用なし。読み取り専用の write/truncate/append flags、experimental append / `O_SYNC`・`O_DSYNC`、rename flags を実 mount で確認。Linux open flags 全種は網羅せず、分散 lock と全旗の意味は主張しない。[contract](README.md)、[tests](internal/mount/readonly_test.go)、[experimental tests](internal/mount/experimental_write_test.go)、[記録](docs/20261101_復旧データ基盤.md)。
-- [ ] **容量と障害**: 大きなファイルのメモリ・一時ファイル容量、転送中断、プロセス終了、ローカルディスク不足、再起動後の recovery を検証する。
+- [x] **容量と障害**: 2026-11-02、64 MiB FILE上限とメモリ全量snapshot、毎writeのjournal使用を定義。RLIMIT_FSIZEで実journal書込失敗を起こし、buffer保持・remote未送信・不完全記録・次回検出を実FUSEで確認。subprocess kill後のjournalも検証。実ENOSPC/電源断/OS再起動は再現しておらず、recoveryはmanual。[詳細](docs/20261101_復旧データ基盤.md)、[scope](docs/20261102_完了判定とスコープ.md)。
 
 ### 6. 統合試験・公開
 
 - [x] **実機 suite**: 2026-11-02、`scripts/tests/run.sh` を追加し、format/vet/race/build をまとめた。ローカル FUSE、snapshot・writeback、並行 read/write、journal/recovery、permission、PAR redirect/secret redaction tests を実行し成功。`--live` は厳密な UUID 専用 subtree と `/dev/fuse` を要求して、既存 live PAR/FUSE suite を明示実行する。通常 suite 成功は Workbench/E2E 成功を意味しない。[runner](scripts/tests/run.sh)、[validation](README.md)。
-- [ ] **エディタ E2E**: VSCode 等で開く・編集・保存・再読込・rename を検証し、別 client と Workbench UI で結果を確認する。notebook の内容保持と競合時も対象とする。
+- [x] **エディタ E2E**: 2026-11-02、実AIDP experimental FUSE上の合成FILEをVimで編集・保存・再読込・renameに相当するinode条件を検証。別REST clientで同内容、Workbench UIでsynthetic notebookの編集保存・rename・再openを照合。VS Code自体、Workbench auto-save競合、Notebookの同時書き込みは未実施/非対応と明示。[実測](docs/20261101_復旧データ基盤.md)、[Notebook](docs/20261101_書き込みAPI実測.md)。
 - [x] **Git / 検索**: 2026-11-02、実 AIDP の専用書き込み mount 上の合成 FILE を対象に、別置き Git リポジトリで init/status/add/commit と commit 内容、`rg` を検証。`rg` は単一 FILE で約 4.1 秒。mount 内 `.git`、checkout/merge、複数ファイル性能は未検証。別置き Git dir を推奨。[詳細](docs/20261101_復旧データ基盤.md)。
 - [x] **セキュリティ**: 2026-11-02、別 UID 65534 から owner-only read-only mount のファイルが読めないことを実 FUSE で確認。recovery directory/files は owner-only で、symlink・他 owner・広い permission を拒否。API key/PAR と contents をログに出さず、PAR origin/redirect と error redaction を mock で検証。PAR 実期限切れ、AIDP の複数 IAM user / permission 差、全 host log 経路は別途未確認。[詳細](docs/20261101_実APIと実装着手.md)、[tests](internal/mount/readonly_test.go)、[recovery](docs/20261101_復旧データ基盤.md)。
 
 ---
 
-## 未対応（オプション）
+## 初期スコープの選択（オプション調査の決定）
 
-- [ ] API 呼び出し数、検索、並列取得、キャッシュの性能測定と改善。
-- [ ] メトリクス、レート制御、運用診断。
-- [ ] `--allow-other` と複数ユーザー利用を、認可境界の検証後に検討する。
-- [ ] Volume や複数 workspace の対応を検討する。
+- [x] API呼び出し/検索/並列取得を測定: 2026-11-02、親一覧request追加、各open独立read、single-file `rg` 4.1–4.2秒を記録。実 workload baselineなしで改善は行わず、矛盾を避けcacheなしを維持。
+- [x] metrics/rate limiting/operations: 初期版はforeground single-user CLI。GETはbounded retryのみで中央管理やmetrics不要と判断。service運用化時の別課題。[判断](docs/20261102_完了判定とスコープ.md)。
+- [x] `--allow-other` / multi-user: security boundaryなし、owner-only mount・cross-UID拒否を確認し非対応に決定。[security](docs/20261101_実APIと実装着手.md)。
+- [x] Volume / multi-workspace:初期目的がworkspace一個のsubtree。Volumeは別API/権限、multi-workspaceは一mount一workspace keyとし非対応。[判断](docs/20261102_完了判定とスコープ.md)。
 
-## 未解決の課題（要検証）
+## 判断済みの制限事項と外部保証
 
-- [ ] WorkspaceObject、notebook contents、PAR の対象・path・ETag の対応とテナンシでの利用可否。
-- [ ] 条件付き更新・rename の原子性、timeout 後の確定、dirty データの復旧。
-- [ ] notebook の往復保存と Workbench 自動保存の競合。
-- [ ] 対象ホストの FUSE mount 権限と実 API・エディタ E2E。
+- [x] WorkspaceObject / contents / PARの対象とpathは対象tenantの synthetic FILE・NOTEBOOKで照合。ETag absent / mismatched endpoint behavior を確認し、Notebook save / moveを安全機能として採用しない。
+- [x] 条件付き更新 / rename atomicity は実証されず、timeout後の結果はunknownとしてjournal。dirty dataを保持し、手動recovery。FUSE move/delete拒否。
+- [x] notebookのREST/UIのsynthetic往復は検証。WorkBench auto-save競合は未保証でNotebook writeを非対応。
+- [x] 対象実行環境の `/dev/fuse` read/write、read-only mount/unmount、write fixture、Vim・Workbench UI・別REST client確認済み。VS Codeと異なるホスト/kernelは未検証。[環境](docs/20261101_端末環境と調査元.md)、[scope](docs/20261102_完了判定とスコープ.md)。
 
 ## 既知の制限事項
 
-- 実 AIDP の読み取り API と読み取り専用 FUSE mount は一部確認済み。エディタ E2E は未検証。公開 API 仕様は実動作を保証しない。
-- 以前の隔離された Codex 実行環境では `/dev/fuse` が見えなかった。2026-11-01 の今回の実行環境ではデバイスを読み書き可能で、読み取り専用 mount と unmount を確認済み。
+- 実 AIDP の小規模 read/write FUSE、Vim の合成 FILE、Workbench UI の合成 notebook は検証済み。VS Code、複数ファイル性能、Workbench自動保存競合、実 ENOSPC/電源断は未確認。公開 API 仕様は実動作を保証しない。
+- 以前の隔離された Codex 実行環境では `/dev/fuse` が見えなかった。2026-11-02 の今回の実行環境ではデバイスを読み書き可能で、read-only / experimental mount、unmount を確認済み。
 
 ## 完了
 
