@@ -478,3 +478,13 @@ func TestExperimentalSynchronousAppendFailureRetainsData(t *testing.T) {
 		t.Fatalf("append recovery error: %v", err)
 	}
 }
+
+func TestExperimentalDeleteOperationsAreUnsupported(t *testing.T) {
+	n := &experimentalNode{}
+	if got := n.Unlink(context.Background(), "file"); got != syscall.EOPNOTSUPP {
+		t.Fatalf("unlink: %v", got)
+	}
+	if got := n.Rmdir(context.Background(), "dir"); got != syscall.EOPNOTSUPP {
+		t.Fatalf("rmdir: %v", got)
+	}
+}

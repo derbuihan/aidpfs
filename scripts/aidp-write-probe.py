@@ -5,6 +5,7 @@ Only creates a randomly named directory under /Workspace/Shared. An interrupted
 run leaves a mode-0600 journal; cleanup never recursively removes unknown entries.
 """
 import argparse
+import errno
 import base64
 import json
 import hashlib
@@ -127,6 +128,23 @@ def main():
         if any(x.get('path') == nested for x in listing(root)): raise RuntimeError('nested folder still present')
         owned.discard(nested)
         nested_pending = False
+        # Probe delete preconditions only on separately created synthetic files.
+        for label in ('contents', 'objects'):
+            delete_path = root + '/conditional-delete-' + label + '.bin'
+            created_delete = request('POST', base + '/objects', headers={'path': delete_path, 'type': 'FILE', 'is-overwrite': 'false', 'Content-Type': 'application/octet-stream'}, data=b'synthetic-delete-probe')
+            if created_delete.status_code not in (200, 201): raise RuntimeError('conditional delete fixture creation failed or ambiguous')
+            owned.add(delete_path)
+            endpoint = contents(delete_path) if label == 'contents' else base + '/objects/' + quote(delete_path, safe='')
+            deleted = request('DELETE', endpoint, headers={'if-match': '"aidpfs-obviously-wrong-etag"'})
+            remaining = any(item.get('path') == delete_path for item in listing(root))
+            check = request('GET', contents(delete_path), params={'content': 1})
+            preserved = False
+            if check.ok:
+                model = check.json()
+                observed = base64.b64decode(model['content']) if model.get('format') == 'base64' else model['content'].encode()
+                preserved = observed == b'synthetic-delete-probe'
+            print('conditional delete', label, 'status', deleted.status_code, 'listed', remaining,
+                  'GET status', check.status_code, 'original preserved', preserved, flush=True)
         file_path = root + '/binary.bin'
         data = bytes([0, 1, 2, 127, 128, 255])
         r = request('POST', base + '/objects', headers={'path': file_path, 'type': 'FILE', 'is-overwrite': 'false', 'Content-Type': 'application/octet-stream'}, data=data)
@@ -288,6 +306,14 @@ def main():
                 model = child_response.json()
                 child_data = base64.b64decode(model['content']) if model.get('format') == 'base64' else model['content'].encode()
                 if child_data != b'nested-synthetic+': raise RuntimeError('nested file mismatch')
+                for operation, target in ((os.unlink, os.path.join(write_mount_dir, 'cli-dir', 'child.bin')),
+                                          (os.rmdir, os.path.join(write_mount_dir, 'cli-dir'))):
+                    try:
+                        operation(target)
+                        raise RuntimeError('unsupported FUSE delete unexpectedly succeeded')
+                    except OSError as exc:
+                        if exc.errno != errno.EOPNOTSUPP: raise
+                print('experimental CLI unlink and rmdir refused', flush=True)
                 if {item.get('path') for item in listing(created_dir)} != {child_path}: raise RuntimeError('unexpected nested directory contents')
                 child_intents = []
                 for name in os.listdir(recovery_dir):

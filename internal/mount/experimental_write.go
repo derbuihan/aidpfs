@@ -143,6 +143,16 @@ func (n *experimentalNode) Mkdir(ctx context.Context, name string, _ uint32, out
 	child := &experimentalNode{reader: n.reader, buffers: n.buffers, rel: rel}
 	return n.NewInode(ctx, child, fs.StableAttr{Mode: syscall.S_IFDIR}), 0
 }
+
+// The remote delete endpoints do not enforce the tested preconditions and can
+// recursively remove nonempty folders. Refuse instead of risking data loss.
+func (n *experimentalNode) Unlink(context.Context, string) syscall.Errno {
+	return syscall.EOPNOTSUPP
+}
+
+func (n *experimentalNode) Rmdir(context.Context, string) syscall.Errno {
+	return syscall.EOPNOTSUPP
+}
 func (n *experimentalNode) Getattr(ctx context.Context, fh fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
 	if h, ok := fh.(*editHandle); ok {
 		editAttrs(&out.Attr, h.metadata, h.buffer)
