@@ -1,0 +1,286 @@
+// Package aidp implements the read-only Workbench backend.
+package aidp
+
+import (
+	"context"
+	"encoding/base64"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net/http"
+	"net/url"
+	"path"
+	"strings"
+	"syscall"
+	"time"
+
+	"aidpfs/internal/backend"
+	"aidpfs/internal/config"
+)
+
+// Signer signs a request immediately before it is sent.
+type Signer interface{ Sign(*http.Request) error }
+
+type Reader struct {
+	base, root string
+	client     *http.Client
+	signer     Signer
+}
+
+// New requires an HTTPS origin; tests can use NewWithClient with an injected server.
+func New(endpoint, platform, workspace, root string, signer Signer) (*Reader, error) {
+	u, err := url.Parse(endpoint)
+	if err != nil || u.Scheme != "https" {
+		return nil, errors.New("endpoint must use HTTPS")
+	}
+	return NewWithClient(endpoint, platform, workspace, root, signer, &http.Client{Timeout: 30 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }})
+}
+
+func NewWithClient(endpoint, platform, workspace, root string, signer Signer, client *http.Client) (*Reader, error) {
+	u, err := url.Parse(endpoint)
+	if err != nil || u.Host == "" || (u.Scheme != "https" && u.Scheme != "http") || u.User != nil || u.RawQuery != "" || u.Fragment != "" || (u.Path != "" && u.Path != "/") || platform == "" || workspace == "" || client == nil || signer == nil {
+		return nil, errors.New("invalid backend configuration")
+	}
+	if _, err := config.Resolve(root, ""); err != nil {
+		return nil, err
+	}
+	return &Reader{base: strings.TrimRight(endpoint, "/") + "/20260430/aiDataPlatforms/" + url.PathEscape(platform) + "/workspaces/" + url.PathEscape(workspace), root: root, signer: signer, client: client}, nil
+}
+
+type APIError struct {
+	Status    int
+	Code      string
+	RequestID string
+}
+
+func (e *APIError) Error() string { return fmt.Sprintf("AIDP request failed (HTTP %d)", e.Status) }
+func (e *APIError) Unwrap() error {
+	switch e.Status {
+	case 400:
+		return syscall.EINVAL
+	case 401, 403:
+		return syscall.EACCES
+	case 404:
+		return syscall.ENOENT
+	case 409, 412:
+		return syscall.ESTALE
+	case 429:
+		return syscall.EAGAIN
+	default:
+		return syscall.EIO
+	}
+}
+
+// A response bound limits resource use until a streaming transfer is implemented.
+const maxResponse = 64 << 20
+
+func (r *Reader) get(ctx context.Context, endpoint string, query url.Values, out any) (http.Header, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint+"?"+query.Encode(), nil)
+	if err != nil {
+		return nil, syscall.EINVAL
+	}
+	req.Header.Set("Date", time.Now().UTC().Format(http.TimeFormat))
+	req.Header.Set("should-update-recent", "false")
+	if err = r.signer.Sign(req); err != nil {
+		return nil, errors.New("unable to sign AIDP request")
+	}
+	resp, err := r.client.Do(req)
+	if err != nil {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		return nil, syscall.EIO
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		var body struct {
+			Code string `json:"code"`
+		}
+		_ = json.NewDecoder(io.LimitReader(resp.Body, 4096)).Decode(&body)
+		return nil, &APIError{Status: resp.StatusCode, Code: body.Code, RequestID: resp.Header.Get("opc-request-id")}
+	}
+	data, err := io.ReadAll(io.LimitReader(resp.Body, maxResponse+1))
+	if err != nil {
+		return nil, syscall.EIO
+	}
+	if len(data) > maxResponse {
+		return nil, syscall.EFBIG
+	}
+	if err = json.Unmarshal(data, out); err != nil {
+		return nil, syscall.EIO
+	}
+	return resp.Header, nil
+}
+
+type object struct {
+	Name    string    `json:"displayName"`
+	Path    string    `json:"path"`
+	Type    string    `json:"type"`
+	Updated time.Time `json:"timeUpdated"`
+	ETag    string    `json:"compositeEtag"`
+}
+type objectList struct {
+	Items []object `json:"items"`
+}
+
+func (r *Reader) ReadDir(ctx context.Context, rel string) ([]backend.Metadata, error) {
+	remote, err := config.Resolve(r.root, rel)
+	if err != nil {
+		return nil, syscall.EINVAL
+	}
+	var result []backend.Metadata
+	page := ""
+	seen := map[string]bool{}
+	names := map[string]bool{}
+	for {
+		q := url.Values{"path": {remote}, "limit": {"1000"}}
+		if page != "" {
+			q.Set("page", page)
+		}
+		var batch objectList
+		h, e := r.get(ctx, r.base+"/objects", q, &batch)
+		if e != nil {
+			return nil, e
+		}
+		if batch.Items == nil {
+			return nil, syscall.EIO
+		}
+		for _, item := range batch.Items {
+			if item.Name == "" || item.Name == "." || item.Name == ".." || strings.ContainsAny(item.Name, "/\x00") || path.Join(remote, item.Name) != item.Path || names[item.Name] {
+				return nil, syscall.EIO
+			}
+			names[item.Name] = true
+			var kind backend.Kind
+			switch item.Type {
+			case "FOLDER":
+				kind = backend.Directory
+			case "FILE":
+				kind = backend.File
+			case "NOTEBOOK":
+				kind = backend.Notebook
+			default:
+				return nil, syscall.ENOTSUP
+			}
+			result = append(result, backend.Metadata{Name: item.Name, Kind: kind, Modified: item.Updated, Version: item.ETag, Size: -1})
+		}
+		page = h.Get("opc-next-page")
+		if page == "" {
+			return result, nil
+		}
+		if seen[page] {
+			return nil, syscall.EIO
+		}
+		seen[page] = true
+	}
+}
+
+type content struct {
+	Name     string          `json:"name"`
+	Path     string          `json:"path"`
+	Type     string          `json:"type"`
+	Format   string          `json:"format"`
+	Modified time.Time       `json:"last_modified"`
+	Content  json.RawMessage `json:"content"`
+}
+
+func (r *Reader) fetch(ctx context.Context, rel string, include bool) (content, []byte, error) {
+	remote, err := config.Resolve(r.root, rel)
+	if err != nil {
+		return content{}, nil, syscall.EINVAL
+	}
+	// contentPath is one path parameter, including encoded slash separators.
+	endpoint := r.base + "/notebook/api/contents/" + url.PathEscape(strings.TrimPrefix(remote, "/"))
+	q := url.Values{"content": {"1"}}
+	if !include {
+		q.Set("content", "0")
+	}
+	var c content
+	_, err = r.get(ctx, endpoint, q, &c)
+	if err != nil {
+		return c, nil, err
+	}
+	if strings.TrimPrefix(c.Path, "/") != strings.TrimPrefix(remote, "/") || (remote != "/" && c.Name != path.Base(remote)) {
+		return c, nil, syscall.EIO
+	}
+	if !include || c.Type == "directory" {
+		return c, nil, nil
+	}
+	var data []byte
+	switch c.Format {
+	case "text":
+		if c.Type != "file" || len(c.Content) == 0 || string(c.Content) == "null" {
+			return c, nil, syscall.EIO
+		}
+		var s string
+		if json.Unmarshal(c.Content, &s) != nil {
+			return c, nil, syscall.EIO
+		}
+		data = []byte(s)
+	case "base64":
+		if c.Type != "file" || len(c.Content) == 0 || string(c.Content) == "null" {
+			return c, nil, syscall.EIO
+		}
+		var s string
+		if json.Unmarshal(c.Content, &s) != nil {
+			return c, nil, syscall.EIO
+		}
+		data, err = base64.StdEncoding.DecodeString(s)
+		if err != nil {
+			return c, nil, syscall.EIO
+		}
+	case "json":
+		if c.Type != "notebook" || len(c.Content) == 0 || string(c.Content) == "null" || !json.Valid(c.Content) || c.Content[0] != '{' {
+			return c, nil, syscall.EIO
+		}
+		data = append([]byte(nil), c.Content...)
+	default:
+		return c, nil, syscall.ENOTSUP
+	}
+	return c, data, nil
+}
+func (r *Reader) Stat(ctx context.Context, rel string) (backend.Metadata, error) {
+	c, _, err := r.fetch(ctx, rel, false)
+	if err != nil {
+		return backend.Metadata{}, err
+	}
+	var data []byte
+	if c.Type != "directory" {
+		c, data, err = r.fetch(ctx, rel, true)
+		if err != nil {
+			return backend.Metadata{}, err
+		}
+	}
+	var kind backend.Kind
+	switch c.Type {
+	case "directory":
+		kind = backend.Directory
+	case "file":
+		kind = backend.File
+	case "notebook":
+		kind = backend.Notebook
+	default:
+		return backend.Metadata{}, syscall.ENOTSUP
+	}
+	return backend.Metadata{Name: c.Name, Kind: kind, Size: int64(len(data)), Modified: c.Modified}, nil
+}
+func (r *Reader) ReadFile(ctx context.Context, rel string) ([]byte, error) {
+	c, _, err := r.fetch(ctx, rel, false)
+	if err != nil {
+		return nil, err
+	}
+	if c.Type == "directory" {
+		return nil, syscall.EISDIR
+	}
+	c, data, err := r.fetch(ctx, rel, true)
+	if err != nil {
+		return nil, err
+	}
+	if c.Type == "directory" {
+		return nil, syscall.EISDIR
+	}
+	if c.Type != "file" && c.Type != "notebook" {
+		return nil, syscall.ENOTSUP
+	}
+	return data, nil
+}
