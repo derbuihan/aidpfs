@@ -41,6 +41,8 @@ type Record struct {
 	RemotePath   string `json:"remote_path"`
 	BaseETag     string `json:"base_etag"`
 	PutETag      string `json:"put_etag,omitempty"`
+	PreviousID   string `json:"previous_id,omitempty"`
+	Generation   uint64 `json:"generation"`
 	Stage        Stage  `json:"stage"`
 	Size         int64  `json:"size"`
 	SHA256       string `json:"sha256"`
@@ -68,7 +70,24 @@ func Open(dir string) (*Store, error) {
 // Create makes a new entry and durably writes content and metadata before
 // returning. On a partial failure the returned nonempty id is a recovery handle;
 // callers must not delete or automatically retry that entry.
-func (s *Store) Create(platformID, workspaceKey, remote, baseETag string, data []byte) (id string, err error) {
+func (s *Store) Create(platformID, workspaceKey, remote, baseETag string, data []byte) (string, error) {
+	return s.CreateAfter(platformID, workspaceKey, remote, baseETag, "", data)
+}
+
+// CreateAfter links snapshots of successive acknowledged edits. The previous
+// entry must belong to the same target and base version and remain prepared.
+func (s *Store) CreateAfter(platformID, workspaceKey, remote, baseETag, previousID string, data []byte) (id string, err error) {
+	var generation uint64
+	if previousID != "" {
+		previous, _, e := s.Load(previousID)
+		if e != nil {
+			return "", e
+		}
+		if previous.PlatformID != platformID || previous.WorkspaceKey != workspaceKey || previous.RemotePath != remote || previous.BaseETag != baseETag || previous.Stage != Prepared || previous.Generation == ^uint64(0) {
+			return "", errors.New("invalid previous recovery snapshot")
+		}
+		generation = previous.Generation + 1
+	}
 	if len(data) > maxPayload {
 		return "", syscall.EFBIG
 	}
@@ -98,7 +117,7 @@ func (s *Store) Create(platformID, workspaceKey, remote, baseETag string, data [
 		return id, err
 	}
 	digest := sha256.Sum256(data)
-	record := Record{Version: 1, PlatformID: platformID, WorkspaceKey: workspaceKey, RemotePath: remote, BaseETag: baseETag, Stage: Prepared, Size: int64(len(data)), SHA256: hex.EncodeToString(digest[:])}
+	record := Record{Version: 1, PlatformID: platformID, WorkspaceKey: workspaceKey, RemotePath: remote, BaseETag: baseETag, PreviousID: previousID, Generation: generation, Stage: Prepared, Size: int64(len(data)), SHA256: hex.EncodeToString(digest[:])}
 	if err = writeRecord(dir, record); err != nil {
 		return id, err
 	}
@@ -117,7 +136,7 @@ func (s *Store) Load(id string) (Record, []byte, error) {
 		return Record{}, nil, err
 	}
 	var r Record
-	if json.Unmarshal(meta, &r) != nil || r.Version != 1 || r.Size < 0 || r.Size > maxPayload || !validStage(r.Stage) || !validIdentity(r.PlatformID) || !validIdentity(r.WorkspaceKey) || !validETag(r.BaseETag) || ((r.Stage == PutConfirmed || r.Stage == UpdateStarted || r.Stage == Verified) && !validETag(r.PutETag)) {
+	if json.Unmarshal(meta, &r) != nil || r.Version != 1 || r.Size < 0 || r.Size > maxPayload || (r.PreviousID != "" && !validID.MatchString(r.PreviousID)) || (r.PreviousID == "" && r.Generation != 0) || (r.PreviousID != "" && r.Generation == 0) || !validStage(r.Stage) || !validIdentity(r.PlatformID) || !validIdentity(r.WorkspaceKey) || !validETag(r.BaseETag) || ((r.Stage == PutConfirmed || r.Stage == UpdateStarted || r.Stage == Verified) && !validETag(r.PutETag)) {
 		return Record{}, nil, errors.New("invalid recovery metadata")
 	}
 	data, err := readFile(filepath.Join(dir, "content"), r.Size)

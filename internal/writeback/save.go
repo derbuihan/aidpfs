@@ -3,6 +3,7 @@
 package writeback
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -26,6 +27,7 @@ type Remote interface {
 type Journal interface {
 	Create(string, string, string, string, []byte) (string, error)
 	Advance(string, recovery.Stage, string) error
+	Load(string) (recovery.Record, []byte, error)
 }
 type Saver struct {
 	Journal Journal
@@ -46,6 +48,22 @@ func (s Saver) SaveExisting(ctx context.Context, target Target, baseETag string,
 	id, err := s.Journal.Create(target.PlatformID, target.WorkspaceKey, target.RemotePath, baseETag, snapshot)
 	if err != nil {
 		return id, fmt.Errorf("persist recovery data: %w", err)
+	}
+	return s.SavePrepared(ctx, id, target, baseETag, snapshot)
+}
+
+// SavePrepared continues exactly the persisted prepared snapshot, ensuring
+// acknowledged edits and the remote transaction share one recovery chain.
+func (s Saver) SavePrepared(ctx context.Context, id string, target Target, baseETag string, data []byte) (string, error) {
+	if s.Journal == nil || s.Remote == nil {
+		return id, errors.New("writeback is not configured")
+	}
+	record, snapshot, err := s.Journal.Load(id)
+	if err != nil {
+		return id, fmt.Errorf("load recovery data: %w", err)
+	}
+	if record.Stage != recovery.Prepared || record.PlatformID != target.PlatformID || record.WorkspaceKey != target.WorkspaceKey || record.RemotePath != target.RemotePath || record.BaseETag != baseETag || !bytes.Equal(snapshot, data) {
+		return id, errors.New("recovery snapshot does not match save")
 	}
 	if err = ctx.Err(); err != nil {
 		return id, err

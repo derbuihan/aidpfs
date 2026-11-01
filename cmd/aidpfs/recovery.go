@@ -42,7 +42,7 @@ func runRecovery(args []string, out io.Writer) error {
 			if e.Invalid {
 				fmt.Fprintf(out, "%s incomplete-or-invalid\n", e.ID)
 			} else {
-				fmt.Fprintf(out, "%s %s %d bytes\n", e.ID, e.Stage, e.Size)
+				fmt.Fprintf(out, "%s %s %d bytes generation=%d previous=%s\n", e.ID, e.Stage, e.Size, e.Generation, e.PreviousID)
 			}
 		}
 		return nil

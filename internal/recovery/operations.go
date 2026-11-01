@@ -10,10 +10,12 @@ import (
 )
 
 type Entry struct {
-	ID      string
-	Stage   Stage
-	Size    int64
-	Invalid bool
+	ID         string
+	Stage      Stage
+	Size       int64
+	PreviousID string
+	Generation uint64
+	Invalid    bool
 }
 
 // List includes incomplete and corrupt entries so they cannot silently vanish.
@@ -33,6 +35,8 @@ func (s *Store) List() ([]Entry, error) {
 		if err == nil {
 			item.Stage = record.Stage
 			item.Size = record.Size
+			item.PreviousID = record.PreviousID
+			item.Generation = record.Generation
 		}
 		out = append(out, item)
 	}

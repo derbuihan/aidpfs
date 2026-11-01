@@ -119,3 +119,5 @@ Oracle AI Data Platform (AIDP) Workbench の workspace をローカルから操�
 - 2026-11-01: recovery journal と条件付き PAR 保存・更新後照合を内部 coordinator で接続し、fake 障害試験と実 AIDP の専用 FILE で保存・復元を確認。FUSE 接続・中断後の recovery・エディタ E2E は未実装。[詳細](docs/20261101_復旧データ基盤.md)。
 
 - 2026-11-01: 復旧 journal の一覧と上書きしない 0600 export、`put_started` 保存後の子プロセス強制終了・再読を検証。電源断、実通信中の終了、再起動後の自動復旧は未検証。[詳細](docs/20261101_復旧データ基盤.md)。
+
+- 2026-11-01: 部分 write/truncate・同期失敗時の freeze・順序付き recovery snapshot を持つ内部 dirty buffer を追加。fake で並列操作・失敗時保持・重複 sync を検証。FUSE 接続、実障害と再起動 recovery は未検証。[詳細](docs/20261101_復旧データ基盤.md)。

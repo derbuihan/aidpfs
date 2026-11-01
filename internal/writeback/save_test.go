@@ -107,3 +107,18 @@ func TestCancelledSaveRetainsPreparedData(t *testing.T) {
 		t.Fatalf("stage %v err %v", r.Stage, err)
 	}
 }
+
+func TestSavePreparedRejectsMismatchedSnapshot(t *testing.T) {
+	dir := t.TempDir()
+	_ = os.Chmod(dir, 0700)
+	journal, _ := recovery.Open(dir)
+	id, err := journal.Create("p", "w", "/Workspace/f", "old", []byte("persisted"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	remote := &fakeRemote{tag: "old"}
+	_, err = (Saver{journal, remote}).SavePrepared(context.Background(), id, Target{"p", "w", "/Workspace/f"}, "old", []byte("different"))
+	if err == nil || len(remote.calls) != 0 {
+		t.Fatal("mismatched data sent")
+	}
+}
