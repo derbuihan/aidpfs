@@ -37,7 +37,7 @@ Oracle AI Data Platform (AIDP) Workbench の workspace をローカルから操�
 
 - [x] **rename**: 2026-11-02、既存先 rename は実 AIDP で 409 となり双方保持、不正 `if-match` の rename は 200 で移動したが原子性・競合保護を示さなかった。FUSE は通常 rename、`RENAME_NOREPLACE`、`RENAME_EXCHANGE`、未知 flag を一律 `EOPNOTSUPP` とし、dirty source の内容を保持する実 mount test に成功。別ディレクトリ・dirty destination・inode寿命は remote rename 自体が無効のため公開操作としては未対応。[契約](README.md)、[実測](docs/20261101_書き込みAPI実測.md)、[test](internal/mount/experimental_write_test.go)。
 - [ ] **保存と復旧**: dirty buffer と同一ファイルへの並列操作を設計し、flush の複数回/未呼出、fsync、release、shutdown、通信断・競合時の保持と復旧をテストする。release のエラーは close に返らないことを前提に、利用者が失敗を検出・回復できる手段を実装する。`fsync` に安易に `ENOSYS` を返さない。
-- [ ] **互換操作**: `chmod`/`chown`、時刻変更、`statfs`、open 後 unlink、forget、locks、非対応 flags の動作を定義し、成功/no-op/errno を明示する。分散 lock をサポートすると未検証のまま主張しない。
+- [x] **互換操作**: 2026-11-02、read-only mount は属性更新を `EROFS`、experimental mount は `EOPNOTSUPP`、`statfs`・unlink・rmdir・rename は `EOPNOTSUPP` と定義。open 後 unlink も拒否し path / handle を保持、POSIX lock は kernel 内のみ。`forget` は FUSE inode reference の内部 bookkeeping のみで remote に副作用なし。読み取り専用の write/truncate/append flags、experimental append / `O_SYNC`・`O_DSYNC`、rename flags を実 mount で確認。Linux open flags 全種は網羅せず、分散 lock と全旗の意味は主張しない。[contract](README.md)、[tests](internal/mount/readonly_test.go)、[experimental tests](internal/mount/experimental_write_test.go)、[記録](docs/20261101_復旧データ基盤.md)。
 - [ ] **容量と障害**: 大きなファイルのメモリ・一時ファイル容量、転送中断、プロセス終了、ローカルディスク不足、再起動後の recovery を検証する。
 
 ### 6. 統合試験・公開
@@ -73,6 +73,8 @@ Oracle AI Data Platform (AIDP) Workbench の workspace をローカルから操�
 - 2026-11-02: `scripts/aidp-write-probe.py` が `/Workspace/Shared` のランダム UUID root のみを作成し、既知の合成 child だけを cleanup することを実 AIDP で検証。正常完了後は root DELETE 204 と親一覧からの消滅を確認。途中の曖昧結果では自動削除を止め、journal と候補を残す。実 AIDP PAR/FUSE の process-kill recovery 試験を含む一連の suite 後も root cleanup 済み。[詳細](docs/20261101_書き込みAPI実測.md)、[復旧](docs/20261101_復旧データ基盤.md)。
 
 - 2026-11-02: Workbench `sandbox` UI で専用 synthetic notebook に marker を入力して未実行保存、一覧から rename、再オープンを実施。UI 表示と signed contents GET が 1 cell / marker で一致し、旧 path は 404、新 path は 200 (`size=null`, ETag 無し)。2 分周期の表示は確認したが周期保存を待つ試験、既存 notebook の outputs / metadata 保持、REST 更新との同時編集は未確認。合成 notebook は削除確認で保留中。[詳細](docs/20261101_書き込みAPI実測.md)。
+
+- 2026-11-02: experimental FUSE の `chmod`/`chown`/`utimens` と open 後 unlink が実 mount で `EOPNOTSUPP`、対象保持・再読取可能となることを確認。statfs/locks/readonly errno は既存実 mount suite で確認。`forget` は kernel/FUSE の参照解放経路であり POSIX user operation ではなく remote mutation を行わない。操作別 errno と未網羅 flag の範囲を README に記載。[contract](README.md)、[test](internal/mount/experimental_write_test.go)。
 
 - 2026-11-02: experimental FUSE の FILE `create`/`write`/`truncate`/`fsync`/`mkdir` と既存 FILE 更新を fake と実 AIDP 専用 mount で検証。部分 write・空 FILE・duplicate create/mkdir の errno と内容、非空 directory delete の remote 危険性を確認し、`unlink`/`rmdir`/`rename` は `EOPNOTSUPP` として拒否する契約を README に明記。rename の flag/置換・同時操作の追加条件は別タスクに残す。[詳細](docs/20261101_復旧データ基盤.md)、[書き込み API 実測](docs/20261101_書き込みAPI実測.md)。
 

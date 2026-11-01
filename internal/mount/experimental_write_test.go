@@ -131,6 +131,37 @@ func TestExperimentalMountWriteSyncAndTruncate(t *testing.T) {
 		t.Fatalf("journal entries %d %v", len(entries), e)
 	}
 }
+
+func TestExperimentalMetadataChangesAndOpenUnlinkAreUnsupported(t *testing.T) {
+	remote := &mountRemote{tag: "old"}
+	d, _ := testExperimentalMount(t, remote)
+	name := filepath.Join(d, "file")
+	modified := time.Unix(1_760_000_000, 0)
+	for label, err := range map[string]error{
+		"chmod":   os.Chmod(name, 0644),
+		"chown":   os.Chown(name, os.Getuid(), os.Getgid()),
+		"utimens": os.Chtimes(name, modified, modified),
+	} {
+		if !errors.Is(err, syscall.EOPNOTSUPP) {
+			t.Errorf("%s error = %v, want EOPNOTSUPP", label, err)
+		}
+	}
+	f, err := os.Open(name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = syscall.Unlink(name); !errors.Is(err, syscall.EOPNOTSUPP) {
+		t.Errorf("unlink with open handle error = %v, want EOPNOTSUPP", err)
+	}
+	data, readErr := os.ReadFile(name)
+	if readErr != nil || string(data) != "abcd" {
+		t.Errorf("file after refused unlink = %q, %v", data, readErr)
+	}
+	if err = f.Close(); err != nil {
+		t.Errorf("close after refused unlink: %v", err)
+	}
+}
+
 func TestExperimentalMountFsyncFailureRetainsJournal(t *testing.T) {
 	remote := &mountRemote{tag: "old", fail: true}
 	d, store := testExperimentalMount(t, remote)

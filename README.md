@@ -54,9 +54,13 @@ The experimental operation contract is deliberately limited:
 | `flush` | May be called more than once | Each writable flush attempts the same save path and returns its error. |
 | `release` / close | Releases local handle only | Does not start network I/O; close cannot report a save failure. Check `fsync` explicitly. |
 | `unlink`, `rmdir`, `rename` | `EOPNOTSUPP` | AIDP preconditions and deletion/move atomicity are not safe enough to expose. |
-| chmod, chown, timestamp changes | No-op or unsupported | AIDP does not expose these POSIX metadata operations. |
+| chmod, chown, timestamp changes | Read-only: `EROFS`; experimental: `EOPNOTSUPP` | AIDP does not expose these POSIX metadata operations. |
+| Open an existing file, then unlink | `EOPNOTSUPP`; open handle and path remain usable | Unlink itself is refused, so POSIX open-unlink semantics are unavailable. |
+| `forget` | Internal FUSE reference bookkeeping only | It is not a userspace operation and does not modify AIDP or recovery data. |
 | POSIX advisory locks | Kernel-local only | A local lock may succeed on one mount, but it is not sent to AIDP and does not coordinate with Workbench, other mounts, or clients. |
 | `statfs` | `EOPNOTSUPP` | AIDP capacity and quota are unavailable. |
+
+The read-only mount rejects write access, `O_TRUNC`, and `O_APPEND` with `EROFS`. The experimental mount supports tested read/write, truncate, append (including open-file status-flag changes), and synchronous-write flags; the FUSE server always uses direct I/O. `RENAME_NOREPLACE`, `RENAME_EXCHANGE`, other rename flags, and unknown rename flags all return `EOPNOTSUPP`. This is not an exhaustive compatibility claim for every Linux `open(2)` flag.
 
 On a failed or uncertain `fsync`, the dirty buffer is frozen and its journal remains for manual inspection. `ESTALE` indicates a detected version conflict; other outcome-unknown failures also require reconciliation. A verified save means the expected bytes were observed at the saved version during verification, not that other clients are locked out.
 
