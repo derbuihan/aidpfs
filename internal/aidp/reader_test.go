@@ -88,12 +88,13 @@ func TestContentAndSize(t *testing.T) {
 func TestErrorsAndTruncation(t *testing.T) {
 	for _, tt := range []struct {
 		status int
+		code   string
 		want   error
-	}{{401, syscall.EACCES}, {403, syscall.EACCES}, {404, syscall.ENOENT}, {409, syscall.ESTALE}, {412, syscall.ESTALE}, {429, syscall.EAGAIN}, {500, syscall.EIO}} {
-		t.Run(fmt.Sprint(tt.status), func(t *testing.T) {
+	}{{401, "NotAuthenticated", syscall.EACCES}, {403, "NotAuthorized", syscall.EACCES}, {404, "NotAuthorizedOrNotFound", syscall.ENOENT}, {404, "InvalidParameter", syscall.EINVAL}, {409, "ResourceLocked", syscall.EBUSY}, {409, "NotAuthorizedOrResourceAlreadyExists", syscall.ESTALE}, {412, "NoEtagMatch", syscall.ESTALE}, {413, "PayloadTooLarge", syscall.EFBIG}, {429, "TooManyRequests", syscall.EAGAIN}, {500, "InternalError", syscall.EIO}} {
+		t.Run(fmt.Sprintf("%d_%s", tt.status, tt.code), func(t *testing.T) {
 			r := serverReader(t, func(w http.ResponseWriter, _ *http.Request) {
 				w.WriteHeader(tt.status)
-				fmt.Fprint(w, `{"code":"secret"}`)
+				fmt.Fprintf(w, `{"code":%q}`, tt.code)
 			})
 			_, e := r.ReadDir(context.Background(), "")
 			if !errors.Is(e, tt.want) || strings.Contains(e.Error(), "secret") {

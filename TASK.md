@@ -87,6 +87,8 @@ Oracle AI Data Platform (AIDP) Workbench の workspace をローカルから操�
 
 ## 完了
 
+- 2026-11-02: OCI API の error code を status と併せて errno に対応付ける処理を追加。`NotAuthorizedOrNotFound` は存在と認可を区別せず `ENOENT` にし、`InvalidParameter`、`ResourceLocked`、`NoEtagMatch`、`PayloadTooLarge` などは個別 errno とする。mock の status/code 組合せとエラー文字列への code 非露出を確認。[詳細](docs/20261101_読み取り再試行と安全性.md)。
+
 - 2026-11-02: objects 一覧で同一 `displayName` が異なる type から重複して返る場合、FUSE 上の名前を曖昧にせず `EIO` で一覧を拒否する既存処理に mock regression test を追加。実 AIDP の同名衝突は未観測で、属性項目全体の確認は継続。[詳細](docs/20261101_実APIと実装着手.md)。
 
 - 2026-11-02: AIDP に容量・quota の情報がないため `statfs` の全ゼロ成功を避け、read-only / experimental mount とも `EOPNOTSUPP` を明示。ローカル実 FUSE の双方で `statfs(2)` の errno を確認。名前衝突など属性項目の残りは引き続き未検証。[詳細](docs/20261101_実装タスク追加調査.md)。

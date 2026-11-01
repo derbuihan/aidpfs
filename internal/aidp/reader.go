@@ -61,6 +61,22 @@ type APIError struct {
 
 func (e *APIError) Error() string { return fmt.Sprintf("AIDP request failed (HTTP %d)", e.Status) }
 func (e *APIError) Unwrap() error {
+	switch e.Code {
+	case "NotAuthenticated", "NotAuthorized":
+		return syscall.EACCES
+	case "NotAuthorizedOrNotFound":
+		// OCI deliberately combines these cases; ENOENT avoids exposing whether
+		// a caller can reach an object that exists but is not authorized.
+		return syscall.ENOENT
+	case "InvalidParameter", "MissingParameter", "CannotParseRequest":
+		return syscall.EINVAL
+	case "ResourceLocked":
+		return syscall.EBUSY
+	case "NoEtagMatch":
+		return syscall.ESTALE
+	case "PayloadTooLarge":
+		return syscall.EFBIG
+	}
 	switch e.Status {
 	case 400:
 		return syscall.EINVAL
