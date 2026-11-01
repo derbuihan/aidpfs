@@ -15,10 +15,11 @@ import (
 )
 
 type fake struct {
-	mu       sync.Mutex
-	data     []byte
-	deleted  bool
-	modified time.Time
+	mu        sync.Mutex
+	data      []byte
+	readCount int
+	deleted   bool
+	modified  time.Time
 }
 
 func (f *fake) Stat(_ context.Context, p string) (backend.Metadata, error) {
@@ -45,6 +46,7 @@ func (f *fake) ReadDir(_ context.Context, p string) ([]backend.Metadata, error) 
 func (f *fake) ReadFile(_ context.Context, p string) ([]byte, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.readCount++
 	if p == "" {
 		return nil, syscall.EISDIR
 	}
@@ -148,5 +150,53 @@ func TestSnapshotBounds(t *testing.T) {
 	b, status := r.Bytes(nil)
 	if status != 0 || string(b) != "c" {
 		t.Fatalf("%q %v", b, status)
+	}
+}
+
+func TestConcurrentOpensUseIndependentSnapshots(t *testing.T) {
+	if _, err := os.Stat("/dev/fuse"); err != nil {
+		t.Skip("FUSE device unavailable")
+	}
+	d := t.TempDir()
+	want := []byte("one snapshot per open")
+	f := &fake{data: append([]byte(nil), want...)}
+	srv, err := Mount(context.Background(), d, f)
+	if err != nil {
+		t.Skipf("FUSE mount unavailable: %v", err)
+	}
+	defer func() {
+		if err := srv.Unmount(); err != nil {
+			t.Errorf("unmount: %v", err)
+		}
+		srv.Wait()
+	}()
+
+	const readers = 16
+	start := make(chan struct{})
+	errs := make(chan error, readers)
+	for i := 0; i < readers; i++ {
+		go func() {
+			<-start
+			got, err := os.ReadFile(filepath.Join(d, "file"))
+			if err != nil {
+				errs <- err
+			} else if string(got) != string(want) {
+				errs <- errors.New("concurrent open returned corrupted or shared content")
+			} else {
+				errs <- nil
+			}
+		}()
+	}
+	close(start)
+	for i := 0; i < readers; i++ {
+		if err := <-errs; err != nil {
+			t.Error(err)
+		}
+	}
+	f.mu.Lock()
+	gotReads := f.readCount
+	f.mu.Unlock()
+	if gotReads != readers {
+		t.Fatalf("backend reads = %d, want one independent read per open (%d)", gotReads, readers)
 	}
 }

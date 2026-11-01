@@ -21,12 +21,10 @@ Oracle AI Data Platform (AIDP) Workbench の workspace をローカルから操�
 
 ### 2. 基盤・backend
 
-- [ ] **エラー・再試行**: HTTP status と OCI error code を errno に対応付け、401/403/404/409/412/429/5xx・timeout・切断をテストする。安全に再試行できる操作だけを対象にし、write の結果不明時や非冪等 POST を自動再実行しない。操作ごとの retry token を確認する。
 - [ ] **秘密情報**: 署名ヘッダー、鍵、PAR URL と query、取得内容をログ・エラー・テスト成果物に出さない。PAR 取得先への認証ヘッダー転送、redirect、期限切れを検証する。
 
 ### 3. 読み取り専用 FUSE
 
-- [ ] **キャッシュ**: メタデータ・negative・内容・kernel page cache の関係、TTL と外部変更時の再検証を設計する。識別子の欠落や変更、破損、削除、権限変更、同時取得をテストする。wsfs の TTL を AIDP の保証として扱わない。
 
 ### 4. 書き込み API と仕様の実測
 
@@ -82,8 +80,12 @@ Oracle AI Data Platform (AIDP) Workbench の workspace をローカルから操�
 - 2026-11-02: OCI profile/region/endpoint/platform/workspace key、remote subtree、mount point の設定・検証と OCI API-key request signing を実装。実 AIDP signed API で接続し、認証対応範囲を API-key profile に限定して記載。[詳細](docs/20261101_実APIと実装着手.md)。
 - 2026-11-02: FUSE から OCI 依存を分離した backend interface、通常 FILE/NOTEBOOK/directory metadata と fake backend を実装。API mock のページング・path・format・error・cancel/timeout/部分応答を含む通常 suite は OCI credential/network 不要で実行可能。[詳細](docs/20261101_実APIと実装着手.md)、[再試行と安全性](docs/20261101_読み取り再試行と安全性.md)。
 - 2026-11-02: read-only API backend で全ページ列挙、path escaping/root containment、属性・内容・Notebook JSON を実装。mock で size と bytes、欠落/重複名を確認し、実 AIDP の FILE と NOTEBOOK で objects path、contents name/type/format/time、size、bytes、PAR との一致・不一致と ETag 欠落を記録。contents の size が null となる API 制約も反映。[実 API 比較](docs/20261101_実APIと実装着手.md)、[書き込み/PAR比較](docs/20261101_書き込みAPI実測.md)。
+
+- 2026-11-02: OCI status/error code→errno、401/403/404/409/412/429/5xx、timeout/cancel/connection cut, GET-only bounded retry, write/POST outcome-unknown no-retry を mock で確認。Oracle endpoint docs の `opc-retry-token` 対応 endpoint と 24 h/early invalidation を調査し、製品コードが token を送信せず自動 POST retry もしない制限を明記。[詳細](docs/20261101_読み取り再試行と安全性.md)。
 - 2026-11-02: read-only FUSE の mount/unmount、指定 subtree、mount owner 限定、readdir/lookup/getattr/open/read と write 拒否を fake 実 mount・実 AIDP で確認。実 AIDP では一覧、find/stat、部分/反復 read、cat/checksum、FILE/NOTEBOOK、外部更新中の既存 handle と再 open を検証済み。小規模の検証で大規模負荷は対象外。[詳細](docs/20261101_実APIと実装着手.md)。
 - 2026-11-02: read-only FUSE の UID/GID、mode、mtime、size、unsupported `statfs` と errno を明文化・検証。directory/file mode 0500/0400、size は実 read bytes、notebook JSON size を API bytes と照合、同名 type 衝突を EIO、未対応操作を明示した。kernel page cache を使わない direct I/O と metadata/negative TTL 0 を選び、実 FILE 外部更新で open handle は旧 snapshot、再 open は新内容を確認。[詳細](docs/20261101_実APIと実装着手.md)、[追加調査](docs/20261101_実装タスク追加調査.md)。
+
+- 2026-11-02: read-only FUSE に metadata/entry/negative/disk cache を持たせず、kernel page cache も direct I/O で迂回する方針を確認。外部削除後も既存 handle の snapshot を読め、新規 lookup は `ENOENT`、16 並列 open は各々別 backend read となり内容混同なしを実 mount race test で確認。cache identity/TTL invalidation は適用しない設計である。[詳細](docs/20261101_実APIと実装着手.md)。
 
 - 2026-11-02: remote root 以外の configured subtree も parent の complete listing で存在確認してから mount/`ReadDir` する。missing root は `ENOENT`、実在する empty FOLDER は空一覧として受け付ける。mock で両方を検証し、実 AIDP probe は `/Workspace` 下の既存 subtree で再成功。[詳細](docs/20261101_実APIと実装着手.md)。
 
