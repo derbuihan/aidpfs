@@ -132,6 +132,10 @@ func waitForUnmount(server mountServer, signals <-chan os.Signal, out io.Writer)
 }
 
 func checkRecoveryAfterUnmount(pending int, journal *recovery.Store) error {
+	unresolved, err := journal.UnresolvedSnapshots()
+	if err != nil {
+		return fmt.Errorf("cannot inspect recovery snapshots after unmount: %w", err)
+	}
 	intents, err := journal.ListCreates()
 	if err != nil {
 		return fmt.Errorf("cannot inspect recovery directory after unmount: %w", err)
@@ -142,8 +146,8 @@ func checkRecoveryAfterUnmount(pending int, journal *recovery.Store) error {
 			unknown++
 		}
 	}
-	if pending != 0 || unknown != 0 {
-		return fmt.Errorf("recovery required: %d unsaved file buffers, %d unconfirmed or invalid create intents; inspect --recovery-dir", pending, unknown)
+	if pending != 0 || unknown != 0 || len(unresolved) != 0 {
+		return fmt.Errorf("recovery required: %d unsaved file buffers, %d unresolved snapshots, %d unconfirmed or invalid create intents; inspect --recovery-dir", pending, len(unresolved), unknown)
 	}
 	return nil
 }

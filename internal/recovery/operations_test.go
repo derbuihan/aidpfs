@@ -155,3 +155,53 @@ func TestLockEmptyRejectsReuseAndConcurrentMount(t *testing.T) {
 		t.Fatal("journal not retained")
 	}
 }
+
+func TestUnresolvedSnapshotsRecognizesVerifiedChainAndBranches(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.Chmod(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	s, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := s.Create("platform", "workspace", "/Workspace/f", "tag", []byte("first"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := s.CreateAfter("platform", "workspace", "/Workspace/f", "tag", first, []byte("second"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	branch, err := s.CreateAfter("platform", "workspace", "/Workspace/f", "tag", first, []byte("branch"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, step := range []struct {
+		stage Stage
+		tag   string
+	}{{PutStarted, ""}, {PutConfirmed, "new-tag"}, {UpdateStarted, ""}, {Verified, ""}} {
+		if err = s.Advance(second, step.stage, step.tag); err != nil {
+			t.Fatal(err)
+		}
+	}
+	unresolved, err := s.UnresolvedSnapshots()
+	if err != nil || len(unresolved) != 1 || unresolved[0] != branch {
+		t.Fatalf("branch: %v %v", unresolved, err)
+	}
+	broken := "0123456789abcdef0123456789abcdef"
+	if err = os.Mkdir(filepath.Join(dir, broken), 0700); err != nil {
+		t.Fatal(err)
+	}
+	unresolved, err = s.UnresolvedSnapshots()
+	if err != nil || len(unresolved) != 2 {
+		t.Fatalf("broken: %v %v", unresolved, err)
+	}
+	if err = os.Remove(filepath.Join(dir, first, "content")); err != nil {
+		t.Fatal(err)
+	}
+	unresolved, err = s.UnresolvedSnapshots()
+	if err != nil || len(unresolved) != 4 {
+		t.Fatalf("broken ancestry: %v %v", unresolved, err)
+	}
+}

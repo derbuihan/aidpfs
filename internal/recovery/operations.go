@@ -76,6 +76,77 @@ func (s *Store) List() ([]Entry, error) {
 	return out, nil
 }
 
+// UnresolvedSnapshots reports invalid entries and snapshot chains that are not
+// covered by a valid verified descendant. Prepared ancestors of a verified
+// snapshot are expected history; another branch remains unresolved.
+func (s *Store) UnresolvedSnapshots() ([]string, error) {
+	entries, err := os.ReadDir(s.dir)
+	if err != nil {
+		return nil, err
+	}
+	type item struct {
+		record Record
+		valid  bool
+	}
+	items := make(map[string]item)
+	for _, entry := range entries {
+		id := entry.Name()
+		if !validID.MatchString(id) {
+			continue
+		}
+		r, _, loadErr := s.Load(id)
+		items[id] = item{record: r, valid: loadErr == nil}
+	}
+	resolved := make(map[string]bool)
+	for id, item := range items {
+		if !item.valid || item.record.Stage != Verified {
+			continue
+		}
+		seen := make(map[string]bool)
+		chain := []string{}
+		current := id
+		var child *Record
+		valid := true
+		for current != "" {
+			if seen[current] || len(chain) >= 10000 {
+				valid = false
+				break
+			}
+			seen[current] = true
+			node, ok := items[current]
+			if !ok || !node.valid {
+				valid = false
+				break
+			}
+			r := node.record
+			if child != nil && (r.Stage != Prepared || r.Generation == ^uint64(0) || child.Generation != r.Generation+1 || child.PlatformID != r.PlatformID || child.WorkspaceKey != r.WorkspaceKey || child.RemotePath != r.RemotePath || child.BaseETag != r.BaseETag) {
+				valid = false
+				break
+			}
+			chain = append(chain, current)
+			// An already validated suffix need not be traversed again.
+			if resolved[current] {
+				break
+			}
+			child = &r
+			current = r.PreviousID
+		}
+		if valid {
+			for _, member := range chain {
+				resolved[member] = true
+			}
+		}
+	}
+	var result []string
+	for id := range items {
+		if !resolved[id] {
+			result = append(result, id)
+		}
+	}
+	sort.Strings(result)
+	return result, nil
+}
+
 // Export copies verified recovery contents to a new owner-only file. It never
 // overwrites a destination, deletes the journal, or contacts the remote API.
 func (s *Store) Export(id, dest string) error {

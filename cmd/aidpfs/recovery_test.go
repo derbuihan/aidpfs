@@ -89,3 +89,20 @@ func TestRecoveryAfterUnmountReportsPendingWork(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestRecoveryAfterUnmountReportsIncompleteSnapshot(t *testing.T) {
+	d := t.TempDir()
+	if err := os.Chmod(d, 0700); err != nil {
+		t.Fatal(err)
+	}
+	s, err := recovery.Open(d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.Mkdir(filepath.Join(d, "0123456789abcdef0123456789abcdef"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err = checkRecoveryAfterUnmount(0, s); err == nil || !strings.Contains(err.Error(), "1 unresolved snapshots") {
+		t.Fatalf("unreported partial journal: %v", err)
+	}
+}

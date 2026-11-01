@@ -87,6 +87,8 @@ Oracle AI Data Platform (AIDP) Workbench の workspace をローカルから操�
 
 ## 完了
 
+- 2026-11-02: unmount 後に不完全・破損 journal と未解決 snapshot 分岐を検出し、検証済み snapshot の正当な先祖のみ完了済みと扱うよう修正。ローカルで分岐・先祖破損を試験し、実 AIDP の正常保存後の CLI 終了と cleanup を確認。実ディスク満杯・強制終了は未検証。[詳細](docs/20261101_復旧データ基盤.md)。
+
 - 2026-11-02: 実 AIDP の専用 mount 上の合成 FILE を対象に、ローカル別置き Git リポジトリの init/status/add/commit と commit 内容、`rg` を確認。単一 FILE の `rg` は 1 回約 4.2 秒。mount 内 .git、checkout/merge、複数ファイル性能は未検証。[詳細](docs/20261101_復旧データ基盤.md)。
 
 - 2026-11-02: 試験的 mount で生存中の同じ path inode を再利用し、ローカル実 FUSE の stat/fstat inode 不一致を修正。設定を限定した非対話 Vim で実 AIDP の合成 FILE を編集・保存し、REST と再 open で一致、cleanup 済み。通常設定・VS Code・Workbench・遠隔置換時の同一性は未検証。[詳細](docs/20261101_復旧データ基盤.md)。
