@@ -61,9 +61,9 @@ func (r *Reader) parMetadataRequest(ctx context.Context, transport *parTransport
 	req.Header.Set("path", remote)
 	req.Header.Set("type", "FILE")
 	req.Header.Set("should-update-recent", "false")
-	if action != "DOWNLOAD" {
-		req.Header.Set("Content-Type", "application/json")
-	}
+	// OCI signs content-type even for a bodyless POST. It must be present
+	// on the wire with the same value that the signer included.
+	req.Header.Set("Content-Type", "application/json")
 	if err = r.signer.Sign(req); err != nil {
 		return parMetadata{}, errors.New("unable to sign AIDP request")
 	}

@@ -31,6 +31,7 @@ def main():
     p.add_argument('--journal', required=True, help='new private recovery journal path')
     p.add_argument('--mount-binary', help='optional aidpfs executable for live mount checks')
     p.add_argument('--region', default='ap-osaka-1')
+    p.add_argument('--go-par-test', action='store_true', help='run Go live PAR integration against this run only')
     a = p.parse_args()
     if not a.endpoint.startswith('https://') or '/' in a.endpoint[8:]:
         p.error('endpoint must be an HTTPS origin')
@@ -169,6 +170,20 @@ def main():
                     print('PAR upload transfer failed', type(exc).__name__, flush=True)
         else:
             print('upload PAR create did not succeed; unknown objects stop cleanup', flush=True)
+        if a.go_par_test:
+            if not put_etag: raise RuntimeError('Go PAR test requires a completed synthetic upload')
+            env = os.environ.copy()
+            env.update({'AIDPFS_LIVE_PAR_PROBE': 'isolated', 'AIDPFS_PROBE_ROOT': root,
+                        'AIDPFS_PROBE_PLATFORM': a.platform_id, 'AIDPFS_PROBE_WORKSPACE': a.workspace_key,
+                        'AIDPFS_PROBE_PROFILE': a.profile, 'AIDPFS_PROBE_REGION': a.region,
+                        'AIDPFS_PROBE_ENDPOINT': a.endpoint})
+            result = subprocess.run(['go', 'test', '-count=1', '-run', '^TestLivePARIsolatedFixture$', '-v', './internal/aidp'], env=env, timeout=120)
+            if result.returncode: raise RuntimeError('Go live PAR test failed')
+            # The Go test restores bytes, but the underlying object has a new ETag.
+            updated_meta = request('POST', base + '/actions/downloadFileMeta',
+                params={'shouldGenerateNewPar': 'true'}, headers=upload_headers)
+            if not updated_meta.ok or not updated_meta.json().get('eTag'): raise RuntimeError('cannot re-read test ETag')
+            put_etag = updated_meta.json()['eTag']
         # Probe duplicate create and a transfer interrupted immediately after CREATE.
         if created.status_code in (200, 201):
             duplicate = request('POST', base + '/actions/uploadFileMeta',

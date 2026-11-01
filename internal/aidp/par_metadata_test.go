@@ -23,6 +23,13 @@ func TestPARMetadataRefreshAndUpdate(t *testing.T) {
 	var calls atomic.Int32
 	r := serverReader(t, func(w http.ResponseWriter, req *http.Request) {
 		calls.Add(1)
+		if req.Header.Get("Content-Type") != "application/json" {
+			t.Error("missing signed content type")
+		}
+		if strings.HasSuffix(req.URL.Path, "/downloadFileMeta") {
+			fmt.Fprintf(w, `{"parUrl":%q,"eTag":"etag"}`, storage.URL+"/p/secret")
+			return
+		}
 		if req.Method != "POST" || req.Header.Get("path") != "/Workspace/a %#" {
 			t.Error("invalid metadata request")
 		}
@@ -37,6 +44,10 @@ func TestPARMetadataRefreshAndUpdate(t *testing.T) {
 		}
 		fmt.Fprint(w, `{"eTag":"new"}`)
 	})
+	_, e = r.parMetadataRequest(context.Background(), p, "a %#", "DOWNLOAD", "", 0)
+	if e != nil {
+		t.Fatalf("download metadata: %v", e)
+	}
 	got, e := r.parMetadataRequest(context.Background(), p, "a %#", "REFRESH", "", 0)
 	if e != nil || got.ETag != "etag" {
 		t.Fatalf("refresh %v", e)
@@ -45,7 +56,7 @@ func TestPARMetadataRefreshAndUpdate(t *testing.T) {
 		t.Fatal("secret leaked")
 	}
 	_, e = r.parMetadataRequest(context.Background(), p, "a %#", "UPDATE", "new", 7)
-	if e != nil || calls.Load() != 2 {
+	if e != nil || calls.Load() != 3 {
 		t.Fatalf("update %v", e)
 	}
 	if _, e = r.parMetadataRequest(context.Background(), p, "../escape", "REFRESH", "", 0); !errors.Is(e, syscall.EINVAL) {
