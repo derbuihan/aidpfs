@@ -103,3 +103,5 @@ Oracle AI Data Platform (AIDP) Workbench の workspace をローカルから操�
 - 2026-11-01: upload PAR の新規 CREATE→署名なし PUT→UPDATE→contents 一致を 7 bytes で確認。重複 CREATE は 409、転送前中断では object が残り削除できた。既存ファイル上書き・障害後の完全な recovery・PAR 有効期限は未検証。[実測詳細](docs/20261101_書き込みAPI実測.md)。
 
 - 2026-11-01: 読み取り GET に限定した一時障害の再試行、timeout、redirect 拒否を追加し mock と `go test -race ./...` で確認。PAR・書き込み・実環境 429/5xx は未検証。[詳細](docs/20261101_読み取り再試行と安全性.md)。
+
+- 2026-11-01: 読み取り専用版の README と Linux CI 設定を追加。現環境で build・test・vet・version を確認。GitHub Actions の実行、配布物と全依存ライセンス通知は未検証。未解決の remote root `/` は CLI で拒否。

@@ -28,3 +28,10 @@ func TestValidate(t *testing.T) {
 		}
 	}
 }
+
+func TestRejectUnresolvedWorkspaceRoot(t *testing.T) {
+	c := Config{Profile: "DEFAULT", Region: "ap-osaka-1", PlatformID: "id", WorkspaceKey: "key", RemotePath: "/", MountPoint: "/mnt/test"}
+	if err := c.Validate(); err == nil {
+		t.Fatal("unresolved root accepted")
+	}
+}

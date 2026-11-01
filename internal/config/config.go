@@ -30,6 +30,9 @@ func (c Config) Validate() error {
 	if !strings.HasPrefix(c.RemotePath, "/") || path.Clean(c.RemotePath) != c.RemotePath || strings.ContainsRune(c.RemotePath, '\x00') {
 		return errors.New("remote-path must be a clean absolute path")
 	}
+	if c.RemotePath == "/" {
+		return errors.New("remote-path / is not supported; select a workspace subtree such as /Workspace")
+	}
 	if !filepath.IsAbs(c.MountPoint) || filepath.Clean(c.MountPoint) != c.MountPoint {
 		return errors.New("mount-point must be a clean absolute path")
 	}
