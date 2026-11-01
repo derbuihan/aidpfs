@@ -11,6 +11,9 @@ import (
 	"aidpfs/internal/aidp"
 	"aidpfs/internal/config"
 	"aidpfs/internal/mount"
+	"aidpfs/internal/recovery"
+	"aidpfs/internal/writeback"
+	"github.com/hanwen/go-fuse/v2/fuse"
 )
 
 var version = "dev"
@@ -25,6 +28,8 @@ func run() error {
 	flag.StringVar(&c.RemotePath, "remote-path", "", "absolute workspace subtree")
 	flag.StringVar(&c.MountPoint, "mount-point", "", "absolute local mount directory")
 	showVersion := flag.Bool("version", false, "print version")
+	experimentalWrite := flag.Bool("experimental-write", false, "enable incomplete existing-file writes; use isolated test data only")
+	recoveryDir := flag.String("recovery-dir", "", "existing private recovery directory (required for experimental writes)")
 	flag.Parse()
 	if *showVersion {
 		fmt.Println("aidpfs", version)
@@ -32,6 +37,9 @@ func run() error {
 	}
 	if flag.NArg() != 0 {
 		return fmt.Errorf("unexpected positional arguments")
+	}
+	if *experimentalWrite != (*recoveryDir != "") {
+		return fmt.Errorf("--experimental-write and --recovery-dir must be specified together")
 	}
 	if err := c.Validate(); err != nil {
 		return err
@@ -46,7 +54,19 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	server, err := mount.Mount(context.Background(), c.MountPoint, r)
+	var server *fuse.Server
+	if *experimentalWrite {
+		store, openErr := recovery.Open(*recoveryDir)
+		if openErr != nil {
+			return fmt.Errorf("recovery directory: %w", openErr)
+		}
+		fmt.Fprintln(os.Stderr, "WARNING: experimental writes are incomplete; use isolated test data only. Recovery entries must be reviewed manually.")
+		server, err = mount.MountExperimental(context.Background(), c.MountPoint, r, func(ctx context.Context, rel string) (*writeback.Buffer, error) {
+			return r.OpenExperimentalBuffer(ctx, rel, c.Region, store)
+		})
+	} else {
+		server, err = mount.Mount(context.Background(), c.MountPoint, r)
+	}
 	if err != nil {
 		return err
 	}

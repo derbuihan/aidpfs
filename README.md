@@ -2,7 +2,7 @@
 
 `aidpfs` is an experimental Linux FUSE filesystem for reading one Oracle AI Data Platform (AIDP) Workbench workspace subtree. It uses the WorkspaceObject and notebook contents APIs with OCI API-key authentication. It is under development; see [TASK.md](TASK.md) for outstanding work.
 
-**The current mount is read-only.** File creation, editing, saving, renaming, and deletion are not supported. In a tested AIDP environment, both contents and WorkspaceObject updates accepted an incorrect `if-match` and changed data; do not rely on those APIs for conflict protection without independently verifying your environment.
+**The default mount is read-only.** An explicitly enabled experimental mode can modify existing regular files and is intended only for isolated test data. Creation, renaming, deletion and notebook saving are not supported. In a tested AIDP environment, both contents and WorkspaceObject updates accepted an incorrect `if-match` and changed data; do not rely on those APIs for conflict protection without independently verifying your environment.
 
 ## Requirements
 
@@ -33,11 +33,17 @@ Unmount in a second terminal with `fusermount3 -u "$HOME/aidp-mount"`, or stop t
 - `stat` fetches file contents to report the size actually returned. API responses larger than 64 MiB fail with `EFBIG`, so binary file size limits depend on the encoded response. This approach can use substantial memory and API requests.
 - Notebooks are exposed as the JSON content returned by the contents API. They may not have the same byte representation as the original stored notebook. In one synthetic API test, cell representation and metadata changed and the PAR JSON differed from contents JSON. Saving and full round-trip preservation remain unverified.
 - Unsupported object types cause directory listing to fail, rather than being silently hidden. The `objects` and contents APIs do not have identical path behavior; only the tested `/Workspace` subtree is known to work. Directory listing, permissions, and paths may differ across AIDP deployments.
-- GET requests alone are retried for selected transient failures. No upload/download PAR workflow is used by the filesystem. Workbench UI, editors, Git operations, multi-user access and large-file behavior are not yet verified end to end.
+- GET requests alone are retried for selected transient failures. The default mount does not use PAR. Workbench UI, editors, Git operations, multi-user access and large-file behavior are not yet verified end to end.
+
+## Experimental existing-file writes
+
+Use only a dedicated test subtree containing disposable regular files. Create a private, empty journal directory and add `--experimental-write --recovery-dir /absolute/private/directory` to the mount command. Both options must be supplied together. A warning is printed at startup; the read-only mode remains the default.
+
+This mode is incomplete: it cannot create, rename or delete files or save notebooks, and many editors rely on those operations. It holds files in memory, limits them to 64 MiB and writes a full local journal snapshot for each mutation; storage usage can grow quickly. Writes use conditional Object Storage PAR operations and post-write verification, but these do not provide a transaction across all AIDP clients and metadata operations. Concurrent clients, multiple mounts, crashes, shutdown, disk exhaustion, and Workbench editing are not fully validated. A failed or uncertain save freezes the affected buffer and requires manual recovery; journal entries are not automatically replayed or removed. Protect and inspect the recovery directory before another run. Use `fsync` and check its result; a successful close is not a complete recovery or durability guarantee.
 
 ## Recovery journal inspection
 
-The experimental save coordinator can retain local recovery entries, but it is not connected to the current read-only FUSE mount. For an existing private recovery directory, inspect entries and export verified journal contents to a **new** local file:
+The experimental write mount retains local recovery entries; the default read-only mount does not. For an existing private recovery directory, inspect entries and export verified journal contents to a **new** local file:
 
 ```sh
 ./aidpfs recovery list --dir /absolute/private/recovery-directory

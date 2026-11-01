@@ -11,6 +11,7 @@ import hashlib
 import os
 import pathlib
 import signal
+import shutil
 import subprocess
 import tempfile
 import time
@@ -30,6 +31,7 @@ def main():
     p.add_argument('--endpoint', default='https://aidp.ap-osaka-1.oci.oraclecloud.com')
     p.add_argument('--journal', required=True, help='new private recovery journal path')
     p.add_argument('--mount-binary', help='optional aidpfs executable for live mount checks')
+    p.add_argument('--write-mount-binary', help='optional aidpfs executable for isolated experimental write checks')
     p.add_argument('--region', default='ap-osaka-1')
     p.add_argument('--go-par-test', action='store_true', help='run Go live PAR integration against this run only')
     a = p.parse_args()
@@ -207,6 +209,59 @@ def main():
                     print('PAR upload transfer failed', type(exc).__name__, flush=True)
         else:
             print('upload PAR create did not succeed; unknown objects stop cleanup', flush=True)
+        if a.write_mount_binary:
+            if not put_etag: raise RuntimeError('experimental mount requires a completed synthetic upload')
+            write_mount_dir = tempfile.mkdtemp(prefix='aidpfs-cli-mount-')
+            recovery_dir = tempfile.mkdtemp(prefix='aidpfs-cli-recovery-')
+            cli = subprocess.Popen([a.write_mount_binary, '--profile', a.profile, '--region', a.region,
+                '--endpoint', a.endpoint, '--platform-id', a.platform_id, '--workspace-key', a.workspace_key,
+                '--remote-path', root, '--mount-point', write_mount_dir, '--experimental-write', '--recovery-dir', recovery_dir],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            cli_success = False
+            try:
+                for _ in range(200):
+                    if os.path.ismount(write_mount_dir) or cli.poll() is not None: break
+                    time.sleep(0.1)
+                if not os.path.ismount(write_mount_dir): raise RuntimeError('experimental CLI mount failed')
+                with open(os.path.join(write_mount_dir, 'upload-par.bin'), 'r+b', buffering=0) as handle:
+                    handle.seek(0)
+                    handle.write(b'Z')
+                    os.fsync(handle.fileno())
+                    check = request('GET', contents(upload_path), params={'content': 1})
+                    if not check.ok: raise RuntimeError('experimental CLI verification failed')
+                    model = check.json()
+                    binary = base64.b64decode(model['content']) if model.get('format') == 'base64' else model['content'].encode()
+                    if binary != b'Z' + upload_bytes[1:]: raise RuntimeError('experimental CLI write mismatch')
+                    handle.seek(0)
+                    handle.write(upload_bytes[:1])
+                    os.fsync(handle.fileno())
+                check = request('GET', contents(upload_path), params={'content': 1})
+                if not check.ok: raise RuntimeError('experimental CLI restore verification failed')
+                model = check.json()
+                binary = base64.b64decode(model['content']) if model.get('format') == 'base64' else model['content'].encode()
+                if binary != upload_bytes: raise RuntimeError('experimental CLI restore mismatch')
+                refreshed_meta = request('POST', base + '/actions/downloadFileMeta', params={'shouldGenerateNewPar': 'true'}, headers=upload_headers)
+                if not refreshed_meta.ok or not refreshed_meta.json().get('eTag'): raise RuntimeError('experimental CLI restore ETag unavailable')
+                put_etag = refreshed_meta.json()['eTag']
+                print('experimental CLI write, fsync, remote read and restore succeeded', flush=True)
+                cli_success = True
+            finally:
+                if os.path.ismount(write_mount_dir):
+                    result = subprocess.run(['fusermount3', '-u', write_mount_dir], capture_output=True, timeout=15)
+                    if result.returncode: cli_success = False
+                if cli.poll() is None:
+                    cli.send_signal(signal.SIGTERM)
+                    try: cli.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        cli.kill()
+                        cli.wait()
+                if os.path.ismount(write_mount_dir): raise RuntimeError('experimental CLI mount still active')
+                os.rmdir(write_mount_dir)
+                if cli_success:
+                    shutil.rmtree(recovery_dir)
+                else:
+                    print('experimental CLI recovery directory retained', recovery_dir, flush=True)
+                    raise RuntimeError('experimental CLI check failed')
         if a.go_par_test:
             if not put_etag: raise RuntimeError('Go PAR test requires a completed synthetic upload')
             delete_fixture = root + '/live-delete.bin'

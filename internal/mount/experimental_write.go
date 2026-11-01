@@ -254,3 +254,9 @@ func mountExperimental(ctx context.Context, mountpoint string, reader backend.Re
 	buffers := &experimentalBuffers{values: map[string]*experimentalEntry{}, open: open}
 	return fs.Mount(mountpoint, &experimentalNode{reader: reader, buffers: buffers}, opts)
 }
+
+// MountExperimental provides explicitly opted-in existing-file writes. It is
+// incomplete and must not be presented as a general purpose writable mount.
+func MountExperimental(ctx context.Context, mountpoint string, reader backend.Reader, open func(context.Context, string) (*writeback.Buffer, error)) (*fuse.Server, error) {
+	return mountExperimental(ctx, mountpoint, reader, open)
+}
