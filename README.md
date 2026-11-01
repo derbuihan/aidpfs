@@ -44,6 +44,21 @@ Use only a dedicated test subtree containing disposable regular files. Create a 
 
 This mode is incomplete: it cannot rename or delete files or save notebooks, and many editors rely on those operations. File and directory creation use non-overwriting requests, but if a request fails or a subsequent file open fails the object may still exist; inspect the target before retrying. A durable create intent records the target before the request; `recovery list` shows intents and whether the server returned success. An unconfirmed intent does not establish whether creation occurred, and a confirmed intent does not establish that the object still exists or that opening it succeeded. Directories are exposed as 0700 and files as 0600 regardless of requested mode. The mount holds files in memory, limits them to 64 MiB and writes a full local journal snapshot for each mutation; storage usage can grow quickly. Writes use conditional Object Storage PAR operations and post-write verification, but these do not provide a transaction across all AIDP clients and metadata operations. Concurrent clients, multiple mounts, crashes, shutdown, disk exhaustion, and Workbench editing are not fully validated. A failed or uncertain save freezes the affected buffer and requires manual recovery; journal entries are not automatically replayed or removed. Startup rejects a nonempty recovery directory and locks it against another cooperating mount while running. Inspect retained entries and use a new empty directory for another run; the directory lock does not prevent another mount with a different journal from accessing the same remote files. Use `fsync` and check its result; a successful close is not a complete recovery or durability guarantee.
 
+The experimental operation contract is deliberately limited:
+
+| Operation | Result | Meaning |
+|---|---|---|
+| Create regular file / mkdir | Supported, no overwrite | A durable local intent precedes one remote request. A later open failure may leave the remote object present; inspect before retrying. |
+| Open existing regular file for write; write/truncate | Supported | Edits stay in a bounded in-memory buffer and local journal. Notebook writes are unsupported. |
+| `fsync` / synchronous write | Supported | Returns success only after conditional PAR transfer, metadata completion, and version/content verification. It does not prevent a later external update. |
+| `flush` | May be called more than once | Each writable flush attempts the same save path and returns its error. |
+| `release` / close | Releases local handle only | Does not start network I/O; close cannot report a save failure. Check `fsync` explicitly. |
+| `unlink`, `rmdir`, `rename` | `EOPNOTSUPP` | AIDP preconditions and deletion/move atomicity are not safe enough to expose. |
+| chmod, chown, timestamp changes, locks | Unsupported | Workspace metadata does not provide these POSIX guarantees. |
+| `statfs` | `EOPNOTSUPP` | AIDP capacity and quota are unavailable. |
+
+On a failed or uncertain `fsync`, the dirty buffer is frozen and its journal remains for manual inspection. `ESTALE` indicates a detected version conflict; other outcome-unknown failures also require reconciliation. A verified save means the expected bytes were observed at the saved version during verification, not that other clients are locked out.
+
 The experimental mount uses the write offset supplied by the kernel, including after `fcntl` changes to `O_APPEND`. Two-handle append and flag changes were tested on the current Linux FUSE environment; behavior across kernels and larger concurrent workloads remains unverified. Atomic append across mounts or other AIDP clients is not provided.
 
 The experimental mount reuses a live FUSE inode for repeated lookups of the same path and type. This inode is not a verified AIDP object identity: an external delete and recreation may not be distinguishable. A configured noninteractive Vim save has been tested on a synthetic file; ordinary Vim settings, VS Code, and Workbench editing remain unverified.

@@ -32,7 +32,6 @@ Oracle AI Data Platform (AIDP) Workbench の workspace をローカルから操�
 - [ ] **競合と整合性**: GET と更新時の ETag、`if-match`、`compositeEtag` の互換性、複数 client の同時更新、外部変更、曖昧な timeout 後の状態を確認する。各操作の atomicity と非空ディレクトリの削除挙動を記録する。
 - [ ] **転送**: upload PAR の取得から転送・完了までの手順、サイズ上限、期限、失敗後の残存物、上書き時の条件付き保護と再試行を確認する。
 - [ ] **notebook**: 読取→保存の往復で cells・metadata・outputs・名前・サイズがどう保持されるか、Workbench の自動保存との競合、UI と REST export の違いを確認する。
-- [ ] **書き込み契約**: 上記の証拠から操作ごとの可否、競合時の errno、成功の意味、非対応・制約、復旧方法を決める。保証できない上書き・競合を黙って成功扱いにしない。
 
 ### 5. 書き込み FUSE
 
@@ -75,6 +74,8 @@ Oracle AI Data Platform (AIDP) Workbench の workspace をローカルから操�
 - 2026-11-02: `scripts/aidp-write-probe.py` が `/Workspace/Shared` のランダム UUID root のみを作成し、既知の合成 child だけを cleanup することを実 AIDP で検証。正常完了後は root DELETE 204 と親一覧からの消滅を確認。途中の曖昧結果では自動削除を止め、journal と候補を残す。実 AIDP PAR/FUSE の process-kill recovery 試験を含む一連の suite 後も root cleanup 済み。[詳細](docs/20261101_書き込みAPI実測.md)、[復旧](docs/20261101_復旧データ基盤.md)。
 
 - 2026-11-02: experimental FUSE の FILE `create`/`write`/`truncate`/`fsync`/`mkdir` と既存 FILE 更新を fake と実 AIDP 専用 mount で検証。部分 write・空 FILE・duplicate create/mkdir の errno と内容、非空 directory delete の remote 危険性を確認し、`unlink`/`rmdir`/`rename` は `EOPNOTSUPP` として拒否する契約を README に明記。rename の flag/置換・同時操作の追加条件は別タスクに残す。[詳細](docs/20261101_復旧データ基盤.md)、[書き込み API 実測](docs/20261101_書き込みAPI実測.md)。
+
+- 2026-11-02: experimental write mount の operation contract を README に整理。create/mkdir の非上書きと intent、FILE-only edit、`fsync`/flush 成功の意味、close が保存しないこと、競合・結果不明時の errno/journal、metadata・delete・rename・statfs 非対応を明示し、fake と実 AIDP fixture の結果へ紐付けた。[README](README.md)、[実測](docs/20261101_書き込みAPI実測.md)、[復旧基盤](docs/20261101_復旧データ基盤.md)。
 
 - 2026-11-02: README に setup/authentication、use、limitations、validation、recovery を整理し、GPL-3.0 と imported Go modules のライセンスを [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) に記載。Linux amd64 binary build、gofmt、vet、race suite は現 HEAD で成功。Ubuntu GitHub Actions run 41301673469 も成功（run commit `ae1554f`、現 HEAD より前）。`docs/` は gitignore で公開対象外。[CI](.github/workflows/ci.yml)。
 
