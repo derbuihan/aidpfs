@@ -55,6 +55,8 @@ func run() error {
 		return err
 	}
 	var server *fuse.Server
+	var experimental *mount.ExperimentalMount
+	var journal *recovery.Store
 	if *experimentalWrite {
 		store, openErr := recovery.Open(*recoveryDir)
 		if openErr != nil {
@@ -65,6 +67,7 @@ func run() error {
 			return fmt.Errorf("recovery directory: %w", lockErr)
 		}
 		defer lock.Close()
+		journal = store
 		fmt.Fprintln(os.Stderr, "WARNING: experimental writes are incomplete; use isolated test data only. Recovery entries must be reviewed manually.")
 		journalCreate := func(ctx context.Context, rel, kind string, create func(context.Context, string) error) error {
 			remote, resolveErr := config.Resolve(c.RemotePath, rel)
@@ -80,13 +83,16 @@ func run() error {
 			}
 			return store.ConfirmCreate(intentID)
 		}
-		server, err = mount.MountExperimental(context.Background(), c.MountPoint, r, func(ctx context.Context, rel string) (*writeback.Buffer, error) {
+		experimental, err = mount.MountExperimental(context.Background(), c.MountPoint, r, func(ctx context.Context, rel string) (*writeback.Buffer, error) {
 			return r.OpenExperimentalBuffer(ctx, rel, c.Region, store)
 		}, func(ctx context.Context, rel string) error {
 			return journalCreate(ctx, rel, "FILE", r.CreateEmptyExperimental)
 		}, func(ctx context.Context, rel string) error {
 			return journalCreate(ctx, rel, "FOLDER", r.CreateDirectoryExperimental)
 		})
+		if err == nil {
+			server = experimental.Server
+		}
 	} else {
 		server, err = mount.Mount(context.Background(), c.MountPoint, r)
 	}
@@ -98,6 +104,26 @@ func run() error {
 	defer signal.Stop(done)
 	go func() { <-done; _ = server.Unmount() }()
 	server.Wait()
+	if experimental != nil {
+		return checkRecoveryAfterUnmount(experimental.Pending(), journal)
+	}
+	return nil
+}
+
+func checkRecoveryAfterUnmount(pending int, journal *recovery.Store) error {
+	intents, err := journal.ListCreates()
+	if err != nil {
+		return fmt.Errorf("cannot inspect recovery directory after unmount: %w", err)
+	}
+	unknown := 0
+	for _, intent := range intents {
+		if intent.Invalid || !intent.Confirmed {
+			unknown++
+		}
+	}
+	if pending != 0 || unknown != 0 {
+		return fmt.Errorf("recovery required: %d unsaved file buffers, %d unconfirmed or invalid create intents; inspect --recovery-dir", pending, unknown)
+	}
 	return nil
 }
 func main() {

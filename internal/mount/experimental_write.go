@@ -70,6 +70,18 @@ func (m *experimentalBuffers) find(rel string) *writeback.Buffer {
 	return nil
 }
 
+func (m *experimentalBuffers) pending() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	count := 0
+	for _, entry := range m.values {
+		if entry.buffer.Dirty() {
+			count++
+		}
+	}
+	return count
+}
+
 type experimentalNode struct {
 	fs.Inode
 	reader  backend.Reader
@@ -316,6 +328,23 @@ func mountExperimental(ctx context.Context, mountpoint string, reader backend.Re
 	return mountExperimentalCreate(ctx, mountpoint, reader, open, nil, nil)
 }
 func mountExperimentalCreate(ctx context.Context, mountpoint string, reader backend.Reader, open func(context.Context, string) (*writeback.Buffer, error), create, mkdir func(context.Context, string) error) (*fuse.Server, error) {
+	mounted, err := mountExperimentalWithState(ctx, mountpoint, reader, open, create, mkdir)
+	if err != nil {
+		return nil, err
+	}
+	return mounted.Server, nil
+}
+
+// ExperimentalMount exposes pending state after the FUSE server stops.
+type ExperimentalMount struct {
+	Server  *fuse.Server
+	buffers *experimentalBuffers
+}
+
+// Pending returns the number of unsaved or failed file buffers.
+func (m *ExperimentalMount) Pending() int { return m.buffers.pending() }
+
+func mountExperimentalWithState(ctx context.Context, mountpoint string, reader backend.Reader, open func(context.Context, string) (*writeback.Buffer, error), create, mkdir func(context.Context, string) error) (*ExperimentalMount, error) {
 	m, e := reader.Stat(ctx, "")
 	if e != nil {
 		return nil, e
@@ -326,11 +355,15 @@ func mountExperimentalCreate(ctx context.Context, mountpoint string, reader back
 	z := time.Duration(0)
 	opts := &fs.Options{MountOptions: fuse.MountOptions{Options: []string{"default_permissions"}, FsName: "aidpfs-test", Name: "aidpfs-test", DisableReadDirPlus: true}, EntryTimeout: &z, AttrTimeout: &z, NegativeTimeout: &z, UID: uint32(os.Getuid()), GID: uint32(os.Getgid())}
 	buffers := &experimentalBuffers{values: map[string]*experimentalEntry{}, open: open, create: create, mkdir: mkdir}
-	return fs.Mount(mountpoint, &experimentalNode{reader: reader, buffers: buffers}, opts)
+	server, err := fs.Mount(mountpoint, &experimentalNode{reader: reader, buffers: buffers}, opts)
+	if err != nil {
+		return nil, err
+	}
+	return &ExperimentalMount{Server: server, buffers: buffers}, nil
 }
 
 // MountExperimental provides explicitly opted-in experimental file writes. It is
 // incomplete and must not be presented as a general purpose writable mount.
-func MountExperimental(ctx context.Context, mountpoint string, reader backend.Reader, open func(context.Context, string) (*writeback.Buffer, error), create, mkdir func(context.Context, string) error) (*fuse.Server, error) {
-	return mountExperimentalCreate(ctx, mountpoint, reader, open, create, mkdir)
+func MountExperimental(ctx context.Context, mountpoint string, reader backend.Reader, open func(context.Context, string) (*writeback.Buffer, error), create, mkdir func(context.Context, string) error) (*ExperimentalMount, error) {
+	return mountExperimentalWithState(ctx, mountpoint, reader, open, create, mkdir)
 }

@@ -523,3 +523,25 @@ func TestExperimentalRenameRefusedWithDirtyHandle(t *testing.T) {
 		t.Fatal("dirty data not preserved")
 	}
 }
+
+func TestExperimentalPendingTracksDirtyAndFailedBuffers(t *testing.T) {
+	remote := &mountRemote{tag: "old", fail: true}
+	b, _ := newMountBuffer(t, remote)
+	m := &experimentalBuffers{values: map[string]*experimentalEntry{"file": {buffer: b, refs: 1}}}
+	if got := m.pending(); got != 0 {
+		t.Fatalf("initial pending %d", got)
+	}
+	if _, err := b.WriteAt([]byte("x"), 0); err != nil {
+		t.Fatal(err)
+	}
+	if got := m.pending(); got != 1 {
+		t.Fatalf("dirty pending %d", got)
+	}
+	if err := b.Sync(context.Background()); err == nil {
+		t.Fatal("sync unexpectedly succeeded")
+	}
+	m.release("file", b)
+	if got := m.pending(); got != 1 {
+		t.Fatalf("failed pending %d", got)
+	}
+}

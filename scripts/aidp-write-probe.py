@@ -401,6 +401,7 @@ def main():
                     except subprocess.TimeoutExpired:
                         cli.kill()
                         cli.wait()
+                if cli.returncode != 0: cli_success = False
                 if os.path.ismount(write_mount_dir): raise RuntimeError('experimental CLI mount still active')
                 os.rmdir(write_mount_dir)
                 if cli_success:

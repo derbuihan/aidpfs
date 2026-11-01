@@ -59,3 +59,33 @@ func TestRecoveryCommands(t *testing.T) {
 		t.Fatalf("overwrite not rejected: %v", err)
 	}
 }
+
+func TestRecoveryAfterUnmountReportsPendingWork(t *testing.T) {
+	d := t.TempDir()
+	if err := os.Chmod(d, 0700); err != nil {
+		t.Fatal(err)
+	}
+	s, err := recovery.Open(d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = checkRecoveryAfterUnmount(0, s); err != nil {
+		t.Fatal(err)
+	}
+	if err = checkRecoveryAfterUnmount(1, s); err == nil {
+		t.Fatal("dirty buffer reported clean")
+	}
+	id, err := s.BeginCreate("platform", "workspace", "/Workspace/new")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = checkRecoveryAfterUnmount(0, s); err == nil {
+		t.Fatal("unconfirmed create reported clean")
+	}
+	if err = s.ConfirmCreate(id); err != nil {
+		t.Fatal(err)
+	}
+	if err = checkRecoveryAfterUnmount(0, s); err != nil {
+		t.Fatal(err)
+	}
+}
