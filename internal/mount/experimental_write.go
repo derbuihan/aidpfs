@@ -28,6 +28,7 @@ type experimentalBuffers struct {
 	mu     sync.Mutex
 	values map[string]*experimentalEntry
 	open   func(context.Context, string) (*writeback.Buffer, error)
+	create func(context.Context, string) error
 }
 
 func (m *experimentalBuffers) get(ctx context.Context, rel string) (*writeback.Buffer, error) {
@@ -83,12 +84,45 @@ type editHandle struct {
 
 func editAttrs(out *fuse.Attr, m backend.Metadata, b *writeback.Buffer) {
 	attributes(out, m)
-	if m.Kind != backend.Directory {
+	if m.Kind == backend.Directory {
+		out.Mode = syscall.S_IFDIR | 0700
+	} else {
 		out.Mode = syscall.S_IFREG | 0600
 	}
 	if b != nil {
 		out.Size = uint64(b.Size())
 	}
+}
+
+func (n *experimentalNode) Create(ctx context.Context, name string, flags uint32, _ uint32, out *fuse.EntryOut) (*fs.Inode, fs.FileHandle, uint32, syscall.Errno) {
+	if n.buffers.create == nil {
+		return nil, nil, 0, syscall.EOPNOTSUPP
+	}
+	if name == "" || name == "." || name == ".." || path.Base(name) != name {
+		return nil, nil, 0, syscall.EINVAL
+	}
+	if flags&syscall.O_APPEND != 0 {
+		return nil, nil, 0, syscall.EOPNOTSUPP
+	}
+	rel := name
+	if n.rel != "" {
+		rel = n.rel + "/" + name
+	}
+	if err := n.buffers.create(ctx, rel); err != nil {
+		return nil, nil, 0, errno(err)
+	}
+	// Once the remote create succeeds, failure to acquire a versioned snapshot
+	// leaves the empty file present; callers must inspect it before retrying.
+	b, err := n.buffers.get(ctx, rel)
+	if err != nil {
+		return nil, nil, 0, errno(err)
+	}
+	m := backend.Metadata{Name: name, Kind: backend.File}
+	editAttrs(&out.Attr, m, b)
+	child := &experimentalNode{reader: n.reader, buffers: n.buffers, rel: rel}
+	inode := n.NewInode(ctx, child, fs.StableAttr{Mode: syscall.S_IFREG})
+	h := &editHandle{buffer: b, writable: flags&syscall.O_ACCMODE != syscall.O_RDONLY, syncWrite: flags&syscall.O_DSYNC != 0, metadata: m}
+	return inode, h, fuse.FOPEN_DIRECT_IO, 0
 }
 func (n *experimentalNode) Getattr(ctx context.Context, fh fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
 	if h, ok := fh.(*editHandle); ok {
@@ -242,6 +276,9 @@ func (n *experimentalNode) Release(_ context.Context, fh fs.FileHandle) syscall.
 	return 0
 }
 func mountExperimental(ctx context.Context, mountpoint string, reader backend.Reader, open func(context.Context, string) (*writeback.Buffer, error)) (*fuse.Server, error) {
+	return mountExperimentalCreate(ctx, mountpoint, reader, open, nil)
+}
+func mountExperimentalCreate(ctx context.Context, mountpoint string, reader backend.Reader, open func(context.Context, string) (*writeback.Buffer, error), create func(context.Context, string) error) (*fuse.Server, error) {
 	m, e := reader.Stat(ctx, "")
 	if e != nil {
 		return nil, e
@@ -251,12 +288,12 @@ func mountExperimental(ctx context.Context, mountpoint string, reader backend.Re
 	}
 	z := time.Duration(0)
 	opts := &fs.Options{MountOptions: fuse.MountOptions{Options: []string{"default_permissions"}, FsName: "aidpfs-test", Name: "aidpfs-test", DisableReadDirPlus: true}, EntryTimeout: &z, AttrTimeout: &z, NegativeTimeout: &z, UID: uint32(os.Getuid()), GID: uint32(os.Getgid())}
-	buffers := &experimentalBuffers{values: map[string]*experimentalEntry{}, open: open}
+	buffers := &experimentalBuffers{values: map[string]*experimentalEntry{}, open: open, create: create}
 	return fs.Mount(mountpoint, &experimentalNode{reader: reader, buffers: buffers}, opts)
 }
 
-// MountExperimental provides explicitly opted-in existing-file writes. It is
+// MountExperimental provides explicitly opted-in experimental file writes. It is
 // incomplete and must not be presented as a general purpose writable mount.
-func MountExperimental(ctx context.Context, mountpoint string, reader backend.Reader, open func(context.Context, string) (*writeback.Buffer, error)) (*fuse.Server, error) {
-	return mountExperimental(ctx, mountpoint, reader, open)
+func MountExperimental(ctx context.Context, mountpoint string, reader backend.Reader, open func(context.Context, string) (*writeback.Buffer, error), create func(context.Context, string) error) (*fuse.Server, error) {
+	return mountExperimentalCreate(ctx, mountpoint, reader, open, create)
 }

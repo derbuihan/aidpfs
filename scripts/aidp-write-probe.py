@@ -223,6 +223,22 @@ def main():
                     if os.path.ismount(write_mount_dir) or cli.poll() is not None: break
                     time.sleep(0.1)
                 if not os.path.ismount(write_mount_dir): raise RuntimeError('experimental CLI mount failed')
+                created_path = root + '/cli-created.bin'
+                with open(os.path.join(write_mount_dir, 'cli-created.bin'), 'xb', buffering=0) as new_file:
+                    owned.add(created_path)
+                    new_file.write(b'created-synthetic')
+                    os.fsync(new_file.fileno())
+                created_read = request('GET', contents(created_path), params={'content': 1})
+                if not created_read.ok: raise RuntimeError('created file verification failed')
+                model = created_read.json()
+                created_data = base64.b64decode(model['content']) if model.get('format') == 'base64' else model['content'].encode()
+                if created_data != b'created-synthetic': raise RuntimeError('created file content mismatch')
+                try:
+                    with open(os.path.join(write_mount_dir, 'cli-created.bin'), 'xb'): pass
+                    raise RuntimeError('exclusive duplicate creation succeeded')
+                except FileExistsError:
+                    pass
+                print('experimental CLI create, write, fsync and duplicate rejection succeeded', flush=True)
                 with open(os.path.join(write_mount_dir, 'upload-par.bin'), 'r+b', buffering=0) as handle:
                     handle.seek(0)
                     handle.write(b'Z')

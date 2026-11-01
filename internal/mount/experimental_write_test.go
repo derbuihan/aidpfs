@@ -12,6 +12,7 @@ import (
 
 	"aidpfs/internal/recovery"
 	"aidpfs/internal/writeback"
+	"github.com/hanwen/go-fuse/v2/fuse"
 )
 
 type mountRemote struct {
@@ -373,6 +374,29 @@ func TestExperimentalSynchronousWrites(t *testing.T) {
 				if puts != 1 {
 					t.Fatal("close repeated synchronous write")
 				}
+			}
+		})
+	}
+}
+
+func TestExperimentalCreateFailureDoesNotRetry(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		createErr error
+		want      syscall.Errno
+	}{{"exists", syscall.EEXIST, syscall.EEXIST}, {"ambiguous", errors.New("unknown outcome"), syscall.EIO}} {
+		t.Run(tc.name, func(t *testing.T) {
+			calls := 0
+			n := &experimentalNode{buffers: &experimentalBuffers{create: func(_ context.Context, name string) error {
+				calls++
+				if name != "new" {
+					t.Fatal("unexpected path")
+				}
+				return tc.createErr
+			}}}
+			_, _, _, got := n.Create(context.Background(), "new", syscall.O_WRONLY, 0600, &fuse.EntryOut{})
+			if got != tc.want || calls != 1 {
+				t.Fatalf("errno=%v calls=%d", got, calls)
 			}
 		})
 	}

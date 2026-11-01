@@ -28,7 +28,7 @@ func run() error {
 	flag.StringVar(&c.RemotePath, "remote-path", "", "absolute workspace subtree")
 	flag.StringVar(&c.MountPoint, "mount-point", "", "absolute local mount directory")
 	showVersion := flag.Bool("version", false, "print version")
-	experimentalWrite := flag.Bool("experimental-write", false, "enable incomplete existing-file writes; use isolated test data only")
+	experimentalWrite := flag.Bool("experimental-write", false, "enable incomplete file writes; use isolated test data only")
 	recoveryDir := flag.String("recovery-dir", "", "existing private recovery directory (required for experimental writes)")
 	flag.Parse()
 	if *showVersion {
@@ -68,7 +68,7 @@ func run() error {
 		fmt.Fprintln(os.Stderr, "WARNING: experimental writes are incomplete; use isolated test data only. Recovery entries must be reviewed manually.")
 		server, err = mount.MountExperimental(context.Background(), c.MountPoint, r, func(ctx context.Context, rel string) (*writeback.Buffer, error) {
 			return r.OpenExperimentalBuffer(ctx, rel, c.Region, store)
-		})
+		}, r.CreateEmptyExperimental)
 	} else {
 		server, err = mount.Mount(context.Background(), c.MountPoint, r)
 	}
