@@ -87,6 +87,8 @@ Oracle AI Data Platform (AIDP) Workbench の workspace をローカルから操�
 
 ## 完了
 
+- 2026-11-02: 試験的書き込み CLI は空の private recovery directory のみ受け付け、起動中は同ディレクトリを排他。ローカル試験で別プロセスのロック、非空時の起動拒否、既存データ保持を確認。別 directory を使う mount 同士や他 client の競合は防がない。[詳細](docs/20261101_復旧データ基盤.md)。
+
 - 2026-11-02: 既存 FILE 限定の試験的書き込み mount を `--experimental-write` と専用 `--recovery-dir` の組で CLI に接続。実 AIDP の専用合成 FILE で CLI mount、write・fsync・別 API の読取、復元・unmount・cleanup を確認。create/rename/delete、notebook、エディタ、完全な競合保護は未対応。[詳細](docs/20261101_復旧データ基盤.md)。
 
 - 2026-11-02: 試験用 FUSE の `O_SYNC` / `O_DSYNC` write を遠隔保存・照合の完了まで待つよう修正。ローカル実 mount で両 flag と失敗時 journal 保持、実 AIDP で `O_SYNC` write 直後・close 前の別 API 読取を確認し cleanup 済み。永続性の全保証や truncate の同期 semantics は未検証。[詳細](docs/20261101_復旧データ基盤.md)。

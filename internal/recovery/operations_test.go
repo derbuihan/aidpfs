@@ -117,3 +117,41 @@ func TestLineageValidatesEveryAncestor(t *testing.T) {
 		t.Fatal("accepted empty id")
 	}
 }
+
+func TestLockEmptyRejectsReuseAndConcurrentMount(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.Chmod(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	s, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lock, err := s.LockEmpty()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.LockEmpty(); err == nil {
+		t.Fatal("second lock succeeded")
+	}
+	if err = lock.Close(); err != nil {
+		t.Fatal(err)
+	}
+	lock, err = s.LockEmpty()
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, err := s.Create("platform", "workspace", "/Workspace/f", "version", []byte("data"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = lock.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.LockEmpty(); err == nil {
+		t.Fatal("nonempty journal accepted")
+	}
+	if _, data, err := s.Load(id); err != nil || string(data) != "data" {
+		t.Fatal("journal not retained")
+	}
+}

@@ -67,6 +67,43 @@ func Open(dir string) (*Store, error) {
 	return &Store{dir: dir}, nil
 }
 
+// LockEmpty holds an advisory lock for a new mount's lifetime. Existing
+// entries, including incomplete ones and unrelated files, require manual
+// review; they must not be silently mixed with a new session.
+func (s *Store) LockEmpty() (*os.File, error) {
+	fd, err := syscall.Open(s.dir, syscall.O_RDONLY|syscall.O_DIRECTORY|syscall.O_CLOEXEC|syscall.O_NOFOLLOW, 0)
+	if err != nil {
+		return nil, err
+	}
+	f := os.NewFile(uintptr(fd), "recovery directory lock")
+	defer func() {
+		if err != nil {
+			f.Close()
+		}
+	}()
+	info, err := f.Stat()
+	if err != nil {
+		return nil, err
+	}
+	st, ok := info.Sys().(*syscall.Stat_t)
+	if !ok || !info.IsDir() || info.Mode().Perm()&0077 != 0 || st.Uid != uint32(os.Getuid()) {
+		err = errors.New("recovery directory must be private and owned by current user")
+		return nil, err
+	}
+	if err = syscall.Flock(fd, syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		return nil, fmt.Errorf("recovery directory is in use: %w", err)
+	}
+	_, err = f.Readdirnames(1)
+	if err == io.EOF {
+		err = nil
+		return f, nil
+	}
+	if err == nil {
+		err = errors.New("recovery directory is not empty; inspect it and use a new empty directory")
+	}
+	return nil, err
+}
+
 // Create makes a new entry and durably writes content and metadata before
 // returning. On a partial failure the returned nonempty id is a recovery handle;
 // callers must not delete or automatically retry that entry.

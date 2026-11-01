@@ -60,6 +60,11 @@ func run() error {
 		if openErr != nil {
 			return fmt.Errorf("recovery directory: %w", openErr)
 		}
+		lock, lockErr := store.LockEmpty()
+		if lockErr != nil {
+			return fmt.Errorf("recovery directory: %w", lockErr)
+		}
+		defer lock.Close()
 		fmt.Fprintln(os.Stderr, "WARNING: experimental writes are incomplete; use isolated test data only. Recovery entries must be reviewed manually.")
 		server, err = mount.MountExperimental(context.Background(), c.MountPoint, r, func(ctx context.Context, rel string) (*writeback.Buffer, error) {
 			return r.OpenExperimentalBuffer(ctx, rel, c.Region, store)
