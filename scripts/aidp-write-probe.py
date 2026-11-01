@@ -209,6 +209,10 @@ def main():
             print('upload PAR create did not succeed; unknown objects stop cleanup', flush=True)
         if a.go_par_test:
             if not put_etag: raise RuntimeError('Go PAR test requires a completed synthetic upload')
+            delete_fixture = root + '/live-delete.bin'
+            created_delete_fixture = request('POST', base + '/objects', headers={'path': delete_fixture, 'type': 'FILE', 'is-overwrite': 'false', 'Content-Type': 'application/octet-stream'}, data=b'synthetic')
+            if created_delete_fixture.status_code not in (200, 201): raise RuntimeError('delete fixture creation failed or ambiguous')
+            owned.add(delete_fixture)
             env = os.environ.copy()
             env.update({'AIDPFS_LIVE_PAR_PROBE': 'isolated', 'AIDPFS_PROBE_ROOT': root,
                         'AIDPFS_PROBE_PLATFORM': a.platform_id, 'AIDPFS_PROBE_WORKSPACE': a.workspace_key,

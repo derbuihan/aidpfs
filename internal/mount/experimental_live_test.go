@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -225,5 +227,68 @@ func TestLiveFUSEIsolatedFixture(t *testing.T) {
 	if e != nil || !bytes.Equal(got, data) {
 		t.Fatalf("conflict restore verification: %v", e)
 	}
+	// A separate synthetic fixture is deleted while an open handle is dirty.
+	deletedFile := filepath.Join(mountpoint, "live-delete.bin")
+	dirty, err := os.OpenFile(deletedFile, os.O_RDWR, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer dirty.Close()
+	localDeleted := []byte("local-after-delete")
+	if err = dirty.Truncate(0); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = dirty.WriteAt(localDeleted, 0); err != nil {
+		t.Fatal(err)
+	}
+	endpoint := os.Getenv("AIDPFS_PROBE_ENDPOINT") + "/20260430/aiDataPlatforms/" + url.PathEscape(os.Getenv("AIDPFS_PROBE_PLATFORM")) + "/workspaces/" + url.PathEscape(os.Getenv("AIDPFS_PROBE_WORKSPACE")) + "/notebook/api/contents/" + url.PathEscape(strings.TrimPrefix(root+"/live-delete.bin", "/"))
+	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, endpoint, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Date", time.Now().UTC().Format(http.TimeFormat))
+	if err = aidp.APIKeySigner(os.Getenv("OCI_CONFIG_FILE"), profile).Sign(req); err != nil {
+		t.Fatal("sign delete failed")
+	}
+	client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatal("delete request failed")
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("delete status %d", resp.StatusCode)
+	}
+	st, err := dirty.Stat()
+	if err != nil || st.Size() != int64(len(localDeleted)) {
+		t.Fatalf("open handle stat after delete: %v", err)
+	}
+	if _, err = os.Stat(deletedFile); !errors.Is(err, syscall.ENOENT) {
+		t.Fatalf("path stat after delete: %v", err)
+	}
+	if err = dirty.Sync(); err == nil {
+		t.Fatal("sync unexpectedly succeeded after deletion")
+	}
+	if err = dirty.Close(); err == nil {
+		t.Fatal("close unexpectedly succeeded after failed sync")
+	}
+	entries, err = journal.List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	found = false
+	for _, entry := range entries {
+		_, content, loadErr := journal.Load(entry.ID)
+		if loadErr == nil && bytes.Equal(content, localDeleted) {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("deleted file dirty content missing from journal")
+	}
+	if _, err = r.Stat(ctx, "live-delete.bin"); !errors.Is(err, syscall.ENOENT) {
+		t.Fatalf("deleted file unexpectedly present: %v", err)
+	}
+	t.Log("live deletion retained dirty journal; sync reported failure")
 	t.Log("live FUSE write, fsync, conflict recovery retention and restore succeeded")
 }
