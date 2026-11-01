@@ -29,6 +29,7 @@ type experimentalBuffers struct {
 	values map[string]*experimentalEntry
 	open   func(context.Context, string) (*writeback.Buffer, error)
 	create func(context.Context, string) error
+	mkdir  func(context.Context, string) error
 }
 
 func (m *experimentalBuffers) get(ctx context.Context, rel string) (*writeback.Buffer, error) {
@@ -123,6 +124,26 @@ func (n *experimentalNode) Create(ctx context.Context, name string, flags uint32
 	inode := n.NewInode(ctx, child, fs.StableAttr{Mode: syscall.S_IFREG})
 	h := &editHandle{buffer: b, writable: flags&syscall.O_ACCMODE != syscall.O_RDONLY, syncWrite: flags&syscall.O_DSYNC != 0, metadata: m}
 	return inode, h, fuse.FOPEN_DIRECT_IO, 0
+}
+
+func (n *experimentalNode) Mkdir(ctx context.Context, name string, _ uint32, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
+	if n.buffers.mkdir == nil {
+		return nil, syscall.EOPNOTSUPP
+	}
+	if name == "" || name == "." || name == ".." || path.Base(name) != name {
+		return nil, syscall.EINVAL
+	}
+	rel := name
+	if n.rel != "" {
+		rel = n.rel + "/" + name
+	}
+	if err := n.buffers.mkdir(ctx, rel); err != nil {
+		return nil, errno(err)
+	}
+	m := backend.Metadata{Name: name, Kind: backend.Directory}
+	editAttrs(&out.Attr, m, nil)
+	child := &experimentalNode{reader: n.reader, buffers: n.buffers, rel: rel}
+	return n.NewInode(ctx, child, fs.StableAttr{Mode: syscall.S_IFDIR}), 0
 }
 func (n *experimentalNode) Getattr(ctx context.Context, fh fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
 	if h, ok := fh.(*editHandle); ok {
@@ -276,9 +297,9 @@ func (n *experimentalNode) Release(_ context.Context, fh fs.FileHandle) syscall.
 	return 0
 }
 func mountExperimental(ctx context.Context, mountpoint string, reader backend.Reader, open func(context.Context, string) (*writeback.Buffer, error)) (*fuse.Server, error) {
-	return mountExperimentalCreate(ctx, mountpoint, reader, open, nil)
+	return mountExperimentalCreate(ctx, mountpoint, reader, open, nil, nil)
 }
-func mountExperimentalCreate(ctx context.Context, mountpoint string, reader backend.Reader, open func(context.Context, string) (*writeback.Buffer, error), create func(context.Context, string) error) (*fuse.Server, error) {
+func mountExperimentalCreate(ctx context.Context, mountpoint string, reader backend.Reader, open func(context.Context, string) (*writeback.Buffer, error), create, mkdir func(context.Context, string) error) (*fuse.Server, error) {
 	m, e := reader.Stat(ctx, "")
 	if e != nil {
 		return nil, e
@@ -288,12 +309,12 @@ func mountExperimentalCreate(ctx context.Context, mountpoint string, reader back
 	}
 	z := time.Duration(0)
 	opts := &fs.Options{MountOptions: fuse.MountOptions{Options: []string{"default_permissions"}, FsName: "aidpfs-test", Name: "aidpfs-test", DisableReadDirPlus: true}, EntryTimeout: &z, AttrTimeout: &z, NegativeTimeout: &z, UID: uint32(os.Getuid()), GID: uint32(os.Getgid())}
-	buffers := &experimentalBuffers{values: map[string]*experimentalEntry{}, open: open, create: create}
+	buffers := &experimentalBuffers{values: map[string]*experimentalEntry{}, open: open, create: create, mkdir: mkdir}
 	return fs.Mount(mountpoint, &experimentalNode{reader: reader, buffers: buffers}, opts)
 }
 
 // MountExperimental provides explicitly opted-in experimental file writes. It is
 // incomplete and must not be presented as a general purpose writable mount.
-func MountExperimental(ctx context.Context, mountpoint string, reader backend.Reader, open func(context.Context, string) (*writeback.Buffer, error), create func(context.Context, string) error) (*fuse.Server, error) {
-	return mountExperimentalCreate(ctx, mountpoint, reader, open, create)
+func MountExperimental(ctx context.Context, mountpoint string, reader backend.Reader, open func(context.Context, string) (*writeback.Buffer, error), create, mkdir func(context.Context, string) error) (*fuse.Server, error) {
+	return mountExperimentalCreate(ctx, mountpoint, reader, open, create, mkdir)
 }

@@ -19,12 +19,21 @@ type CreateIntent struct {
 	PlatformID   string `json:"platform_id"`
 	WorkspaceKey string `json:"workspace_key"`
 	RemotePath   string `json:"remote_path"`
+	Kind         string `json:"kind,omitempty"`
 	Confirmed    bool   `json:"confirmed"`
 	Invalid      bool   `json:"invalid"`
 }
 
 // BeginCreate durably records the target before any remote create attempt.
 func (s *Store) BeginCreate(platform, workspace, remote string) (string, error) {
+	return s.BeginCreateKind(platform, workspace, remote, "FILE")
+}
+
+// BeginCreateKind records a FILE or FOLDER creation attempt.
+func (s *Store) BeginCreateKind(platform, workspace, remote, kind string) (string, error) {
+	if kind != "FILE" && kind != "FOLDER" {
+		return "", errors.New("invalid create kind")
+	}
 	if !validIdentity(platform) || !validIdentity(workspace) || !strings.HasPrefix(remote, "/") || path.Clean(remote) != remote || remote == "/" || strings.ContainsRune(remote, '\x00') {
 		return "", errors.New("invalid create target")
 	}
@@ -33,7 +42,7 @@ func (s *Store) BeginCreate(platform, workspace, remote string) (string, error) 
 		return "", err
 	}
 	id := hex.EncodeToString(key[:])
-	data, err := json.Marshal(CreateIntent{ID: id, PlatformID: platform, WorkspaceKey: workspace, RemotePath: remote})
+	data, err := json.Marshal(CreateIntent{ID: id, PlatformID: platform, WorkspaceKey: workspace, RemotePath: remote, Kind: kind})
 	if err != nil {
 		return "", err
 	}
@@ -80,7 +89,7 @@ func (s *Store) ListCreates() ([]CreateIntent, error) {
 		raw, e := readFile(filepath.Join(s.dir, name), 64<<10)
 		if e == nil {
 			var r CreateIntent
-			if json.Unmarshal(raw, &r) == nil && r.ID == id && !r.Confirmed && !r.Invalid && validIdentity(r.PlatformID) && validIdentity(r.WorkspaceKey) && strings.HasPrefix(r.RemotePath, "/") && path.Clean(r.RemotePath) == r.RemotePath && r.RemotePath != "/" && !strings.ContainsRune(r.RemotePath, '\x00') {
+			if json.Unmarshal(raw, &r) == nil && r.ID == id && !r.Confirmed && !r.Invalid && (r.Kind == "" || r.Kind == "FILE" || r.Kind == "FOLDER") && validIdentity(r.PlatformID) && validIdentity(r.WorkspaceKey) && strings.HasPrefix(r.RemotePath, "/") && path.Clean(r.RemotePath) == r.RemotePath && r.RemotePath != "/" && !strings.ContainsRune(r.RemotePath, '\x00') {
 				item = r
 				marker, markErr := readFile(filepath.Join(s.dir, "create-"+id+".done"), 32)
 				if markErr == nil {

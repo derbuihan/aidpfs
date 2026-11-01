@@ -15,6 +15,15 @@ import (
 // empty file. A transport error or server failure is ambiguous: the file may
 // already exist, so callers must not retry automatically.
 func (r *Reader) CreateEmptyExperimental(ctx context.Context, rel string) error {
+	return r.createObjectExperimental(ctx, rel, "FILE")
+}
+
+// CreateDirectoryExperimental creates an empty directory without overwrite.
+func (r *Reader) CreateDirectoryExperimental(ctx context.Context, rel string) error {
+	return r.createObjectExperimental(ctx, rel, "FOLDER")
+}
+
+func (r *Reader) createObjectExperimental(ctx context.Context, rel, kind string) error {
 	remote, err := config.Resolve(r.root, rel)
 	if err != nil || rel == "" {
 		return syscall.EINVAL
@@ -25,7 +34,7 @@ func (r *Reader) CreateEmptyExperimental(ctx context.Context, rel string) error 
 	}
 	req.Header.Set("Date", time.Now().UTC().Format(http.TimeFormat))
 	req.Header.Set("path", remote)
-	req.Header.Set("type", "FILE")
+	req.Header.Set("type", kind)
 	req.Header.Set("is-overwrite", "false")
 	req.Header.Set("Content-Type", "application/octet-stream")
 	if err = r.signer.Sign(req); err != nil {

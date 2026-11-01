@@ -251,6 +251,29 @@ def main():
                     raise RuntimeError('create intent diagnosis failed')
                 print('experimental CLI create intent diagnosis succeeded', flush=True)
                 print('experimental CLI create, write, fsync and duplicate rejection succeeded', flush=True)
+                created_dir = root + '/cli-dir'
+                os.mkdir(os.path.join(write_mount_dir, 'cli-dir'))
+                owned.add(created_dir)
+                if not os.path.isdir(os.path.join(write_mount_dir, 'cli-dir')): raise RuntimeError('created directory not visible')
+                try:
+                    os.mkdir(os.path.join(write_mount_dir, 'cli-dir'))
+                    raise RuntimeError('duplicate mkdir succeeded')
+                except FileExistsError:
+                    pass
+                dir_items = [entry for entry in listing(root) if entry.get('path') == created_dir and entry.get('type') == 'FOLDER']
+                if len(dir_items) != 1: raise RuntimeError('created directory not listed')
+                dir_intents = []
+                for name in os.listdir(recovery_dir):
+                    if name.startswith('create-') and name.endswith('.json'):
+                        with open(os.path.join(recovery_dir, name)) as f: item = json.load(f)
+                        if item.get('remote_path') == created_dir and item.get('kind') == 'FOLDER' and os.path.isfile(os.path.join(recovery_dir, name[:-5]+'.done')):
+                            dir_intents.append(item)
+                if len(dir_intents) != 1: raise RuntimeError('directory create intent missing')
+                diagnostic = subprocess.run([a.write_mount_binary, 'recovery', 'inspect-create', '--dir', recovery_dir,
+                    '--id', dir_intents[0]['id'], '--region', a.region, '--profile', a.profile, '--endpoint', a.endpoint],
+                    capture_output=True, text=True, timeout=60)
+                if diagnostic.returncode or 'confirmed=true observation=directory_listed' not in diagnostic.stdout: raise RuntimeError('directory diagnosis failed')
+                print('experimental CLI mkdir, duplicate rejection and intent diagnosis succeeded', flush=True)
                 with open(os.path.join(write_mount_dir, 'upload-par.bin'), 'r+b', buffering=0) as handle:
                     handle.seek(0)
                     handle.write(b'Z')

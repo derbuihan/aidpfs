@@ -40,4 +40,21 @@ func TestCreateIntentRecordsUnknownAndConfirmed(t *testing.T) {
 	if _, err = s.BeginCreate("platform", "workspace", "/Workspace/../escape"); err == nil {
 		t.Fatal("invalid path accepted")
 	}
+	dirID, err := s.BeginCreateKind("platform", "workspace", "/Workspace/dir", "FOLDER")
+	if err != nil {
+		t.Fatal(err)
+	}
+	entries, err = s.ListCreates()
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, entry := range entries {
+		if entry.ID == dirID && entry.Kind == "FOLDER" && !entry.Invalid {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("directory intent missing")
+	}
 }

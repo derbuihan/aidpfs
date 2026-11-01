@@ -70,3 +70,22 @@ func TestCreateEmptyExperimentalDisconnectIsUnknown(t *testing.T) {
 		t.Fatalf("attempts: %d", calls.Load())
 	}
 }
+
+func TestCreateDirectoryExperimental(t *testing.T) {
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		if r.Header.Get("type") != "FOLDER" || r.Header.Get("is-overwrite") != "false" {
+			t.Error("incorrect directory create request")
+		}
+		w.WriteHeader(http.StatusConflict)
+	}))
+	defer server.Close()
+	reader, err := NewWithClient(server.URL, "platform", "workspace", "/Workspace", noSigner{}, server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = reader.CreateDirectoryExperimental(context.Background(), "dir"); !errors.Is(err, syscall.EEXIST) || calls.Load() != 1 {
+		t.Fatalf("error %v calls %d", err, calls.Load())
+	}
+}

@@ -401,3 +401,12 @@ func TestExperimentalCreateFailureDoesNotRetry(t *testing.T) {
 		})
 	}
 }
+
+func TestExperimentalMkdirFailureDoesNotRetry(t *testing.T) {
+	calls := 0
+	n := &experimentalNode{buffers: &experimentalBuffers{mkdir: func(_ context.Context, rel string) error { calls++; return syscall.EEXIST }}}
+	_, err := n.Mkdir(context.Background(), "dir", 0700, &fuse.EntryOut{})
+	if err != syscall.EEXIST || calls != 1 {
+		t.Fatalf("errno %v calls %d", err, calls)
+	}
+}

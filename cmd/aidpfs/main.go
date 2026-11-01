@@ -66,21 +66,26 @@ func run() error {
 		}
 		defer lock.Close()
 		fmt.Fprintln(os.Stderr, "WARNING: experimental writes are incomplete; use isolated test data only. Recovery entries must be reviewed manually.")
-		server, err = mount.MountExperimental(context.Background(), c.MountPoint, r, func(ctx context.Context, rel string) (*writeback.Buffer, error) {
-			return r.OpenExperimentalBuffer(ctx, rel, c.Region, store)
-		}, func(ctx context.Context, rel string) error {
+		journalCreate := func(ctx context.Context, rel, kind string, create func(context.Context, string) error) error {
 			remote, resolveErr := config.Resolve(c.RemotePath, rel)
 			if resolveErr != nil {
 				return resolveErr
 			}
-			intentID, intentErr := store.BeginCreate(c.PlatformID, c.WorkspaceKey, remote)
+			intentID, intentErr := store.BeginCreateKind(c.PlatformID, c.WorkspaceKey, remote, kind)
 			if intentErr != nil {
 				return intentErr
 			}
-			if createErr := r.CreateEmptyExperimental(ctx, rel); createErr != nil {
+			if createErr := create(ctx, rel); createErr != nil {
 				return createErr
 			}
 			return store.ConfirmCreate(intentID)
+		}
+		server, err = mount.MountExperimental(context.Background(), c.MountPoint, r, func(ctx context.Context, rel string) (*writeback.Buffer, error) {
+			return r.OpenExperimentalBuffer(ctx, rel, c.Region, store)
+		}, func(ctx context.Context, rel string) error {
+			return journalCreate(ctx, rel, "FILE", r.CreateEmptyExperimental)
+		}, func(ctx context.Context, rel string) error {
+			return journalCreate(ctx, rel, "FOLDER", r.CreateDirectoryExperimental)
 		})
 	} else {
 		server, err = mount.Mount(context.Background(), c.MountPoint, r)
