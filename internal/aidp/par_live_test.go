@@ -1,10 +1,13 @@
 package aidp
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"os"
+	"os/exec"
 	"regexp"
 	"syscall"
 	"testing"
@@ -178,4 +181,131 @@ func TestLivePARIsolatedFixture(t *testing.T) {
 	if err != nil || !bytes.Equal(data, original) {
 		t.Fatalf("race restore read: %v", err)
 	}
+	exerciseLiveCrash(t, ctx, r, par, root, region, original)
+}
+
+// Child mutates only the UUID-scoped synthetic file, then waits before writing
+// the PUT result to disk. The parent kills it and reconciles the result.
+func TestLivePARCrashChild(t *testing.T) {
+	if os.Getenv("AIDPFS_LIVE_CRASH") != "1" {
+		t.Skip("live crash helper")
+	}
+	root := os.Getenv("AIDPFS_PROBE_ROOT")
+	if !regexp.MustCompile(`^/Workspace/Shared/aidpfs-probe-[0-9a-f]{32}$`).MatchString(root) {
+		t.Fatal("invalid fixture root")
+	}
+	r, e := New(os.Getenv("AIDPFS_PROBE_ENDPOINT"), os.Getenv("AIDPFS_PROBE_PLATFORM"), os.Getenv("AIDPFS_PROBE_WORKSPACE"), root, APIKeySigner(os.Getenv("OCI_CONFIG_FILE"), os.Getenv("AIDPFS_PROBE_PROFILE")))
+	if e != nil {
+		t.Fatal(e)
+	}
+	p, e := newOCIParTransport(os.Getenv("AIDPFS_PROBE_REGION"))
+	if e != nil {
+		t.Fatal(e)
+	}
+	journal, e := recovery.Open(os.Getenv("AIDPFS_LIVE_CRASH_DIR"))
+	if e != nil {
+		t.Fatal(e)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	meta, e := r.parMetadataRequest(ctx, p, "upload-par.bin", "DOWNLOAD", "", 0)
+	if e != nil {
+		t.Fatal(e)
+	}
+	id, e := journal.Create(r.platformID, r.workspaceKey, root+"/upload-par.bin", meta.ETag, []byte("crash-synthetic"))
+	if e != nil {
+		t.Fatal(e)
+	}
+	upload, e := r.parMetadataRequest(ctx, p, "upload-par.bin", "REFRESH", "", 0)
+	if e != nil {
+		t.Fatal(e)
+	}
+	if e = journal.Advance(id, recovery.PutStarted, ""); e != nil {
+		t.Fatal(e)
+	}
+	if _, e = p.putExisting(ctx, upload.URL, meta.ETag, []byte("crash-synthetic")); e != nil {
+		t.Fatal(e)
+	}
+	fmt.Println("PUT_ACCEPTED")
+	time.Sleep(time.Hour)
+}
+
+func exerciseLiveCrash(t *testing.T, ctx context.Context, r *Reader, p *parTransport, root, region string, original []byte) {
+	t.Helper()
+	dir := t.TempDir()
+	if err := os.Chmod(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	child := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestLivePARCrashChild$")
+	child.Env = append(os.Environ(), "AIDPFS_LIVE_CRASH=1", "AIDPFS_LIVE_CRASH_DIR="+dir)
+	stdout, err := child.StdoutPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = child.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if child.ProcessState == nil {
+			_ = child.Process.Kill()
+			_ = child.Wait()
+		}
+	}()
+	signal := make(chan string, 1)
+	go func() {
+		scanner := bufio.NewScanner(stdout)
+		if scanner.Scan() {
+			signal <- scanner.Text()
+		} else {
+			signal <- ""
+		}
+	}()
+	select {
+	case msg := <-signal:
+		if msg != "PUT_ACCEPTED" {
+			t.Fatal("child did not confirm PUT")
+		}
+	case <-ctx.Done():
+		t.Fatal("child timed out")
+	}
+	if err = child.Process.Kill(); err != nil {
+		t.Fatal(err)
+	}
+	_ = child.Wait()
+	journal, err := recovery.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	entries, err := journal.List()
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("crash journal list: %v", err)
+	}
+	record, data, err := journal.Load(entries[0].ID)
+	if err != nil || record.Stage != recovery.PutStarted || !bytes.Equal(data, []byte("crash-synthetic")) {
+		t.Fatalf("crash journal: %v", err)
+	}
+	observation, err := r.InspectRecovery(ctx, region, record, data)
+	if err != nil || observation != writeback.ContentMatchUnknownVersion {
+		t.Fatalf("crash observation %s: %v", observation, err)
+	}
+	meta, err := r.parMetadataRequest(ctx, p, "upload-par.bin", "DOWNLOAD", "", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	refresh, err := r.parMetadataRequest(ctx, p, "upload-par.bin", "REFRESH", "", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tag, err := p.putExisting(ctx, refresh.URL, meta.ETag, original)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = r.parMetadataRequest(ctx, p, "upload-par.bin", "UPDATE", tag, int64(len(original))); err != nil {
+		t.Fatal(err)
+	}
+	restored, err := r.ReadFile(ctx, "upload-par.bin")
+	if err != nil || !bytes.Equal(restored, original) {
+		t.Fatalf("crash fixture restore: %v", err)
+	}
+	t.Log("live PUT accepted then process killed: retained journal and ambiguous observation confirmed")
 }
