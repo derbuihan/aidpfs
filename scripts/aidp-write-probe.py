@@ -6,9 +6,13 @@ run leaves a mode-0600 journal; cleanup never recursively removes unknown entrie
 """
 import argparse
 import json
+import hashlib
 import os
 import pathlib
 import signal
+import subprocess
+import tempfile
+import time
 import sys
 import uuid
 from urllib.parse import quote
@@ -24,6 +28,8 @@ def main():
     p.add_argument('--profile', default='OCI_TOKYO')
     p.add_argument('--endpoint', default='https://aidp.ap-osaka-1.oci.oraclecloud.com')
     p.add_argument('--journal', required=True, help='new private recovery journal path')
+    p.add_argument('--mount-binary', help='optional aidpfs executable for live mount checks')
+    p.add_argument('--region', default='ap-osaka-1')
     a = p.parse_args()
     if not a.endpoint.startswith('https://') or '/' in a.endpoint[8:]:
         p.error('endpoint must be an HTTPS origin')
@@ -68,6 +74,9 @@ def main():
         raise KeyboardInterrupt()
     signal.signal(signal.SIGTERM, stop)
     created_root = False
+    mount_dir = None
+    mount_process = None
+    open_handle = None
     owned = set()
     try:
         if any(x.get('path') == root for x in listing('/Workspace/Shared')):
@@ -99,12 +108,33 @@ def main():
             obj = r.json()
             got = base64.b64decode(obj['content']) if obj.get('format') == 'base64' else obj.get('content', '').encode()
             print('file contents format', obj.get('format'), 'bytes match', got == data, 'ETag present', bool(r.headers.get('etag')), flush=True)
+        if a.mount_binary:
+            mount_dir = tempfile.mkdtemp(prefix='aidpfs-write-probe-')
+            mount_process = subprocess.Popen([a.mount_binary, '--profile', a.profile, '--region', a.region,
+                '--endpoint', a.endpoint, '--platform-id', a.platform_id, '--workspace-key', a.workspace_key,
+                '--remote-path', root, '--mount-point', mount_dir], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            for _ in range(200):
+                if os.path.ismount(mount_dir) or mount_process.poll() is not None: break
+                time.sleep(0.1)
+            if not os.path.ismount(mount_dir): raise RuntimeError('probe mount failed')
+            mounted_path = os.path.join(mount_dir, 'binary.bin')
+            open_handle = open(mounted_path, 'rb', buffering=0)
+            before = open_handle.read()
+            print('mounted binary SHA256 match', hashlib.sha256(before).digest() == hashlib.sha256(data).digest(),
+                  'stat size match', os.stat(mounted_path).st_size == len(data), flush=True)
         # Invalid conditional update must not change data; never assume success means protection.
         r = request('PUT', contents(file_path), headers={'if-match': '"aidpfs-obviously-wrong-etag"'}, json={'type': 'file', 'format': 'text', 'content': 'changed'})
         r2 = request('GET', contents(file_path), params={'content': 1})
         if r2.ok:
             obj = r2.json(); got = base64.b64decode(obj['content']) if obj.get('format') == 'base64' else obj.get('content', '').encode()
             print('wrong if-match rejected', r.status_code in (409, 412), 'original preserved', got == data, flush=True)
+            if open_handle:
+                open_handle.seek(0)
+                old = open_handle.read()
+                with open(mounted_path, 'rb') as new_handle:
+                    fresh = new_handle.read()
+                print('mounted existing handle keeps old bytes', old == data, 'reopen sees updated bytes', fresh == got,
+                      'new stat size match', os.stat(mounted_path).st_size == len(got), flush=True)
         notebook = root + '/test.ipynb'
         payload = {'type': 'notebook', 'format': 'json', 'content': {'cells': [], 'metadata': {}, 'nbformat': 4, 'nbformat_minor': 5}}
         r = request('PUT', contents(notebook), json=payload)
@@ -119,6 +149,20 @@ def main():
             print('notebook wrong if-match rejected', bad.status_code in (409, 412), 'original preserved', verify.ok and verify.json().get('content') == payload['content'], flush=True)
         print('probe finished', flush=True)
     finally:
+        if open_handle:
+            open_handle.close()
+        if mount_dir:
+            if os.path.ismount(mount_dir):
+                result = subprocess.run(['fusermount3', '-u', mount_dir], capture_output=True, timeout=15)
+                print('probe unmount status', result.returncode, flush=True)
+            if mount_process and mount_process.poll() is None:
+                mount_process.send_signal(signal.SIGTERM)
+                try: mount_process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    mount_process.kill()
+                    mount_process.wait()
+            if os.path.ismount(mount_dir): raise RuntimeError('mount still active; journal retained')
+            os.rmdir(mount_dir)
         if created_root:
             try:
                 children = listing(root)

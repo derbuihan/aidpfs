@@ -14,8 +14,9 @@ import (
 )
 
 type fake struct {
-	mu   sync.Mutex
-	data []byte
+	mu      sync.Mutex
+	data    []byte
+	deleted bool
 }
 
 func (f *fake) Stat(_ context.Context, p string) (backend.Metadata, error) {
@@ -25,6 +26,9 @@ func (f *fake) Stat(_ context.Context, p string) (backend.Metadata, error) {
 	case "":
 		return backend.Metadata{Kind: backend.Directory}, nil
 	case "file":
+		if f.deleted {
+			return backend.Metadata{}, syscall.ENOENT
+		}
 		return backend.Metadata{Name: "file", Kind: backend.File, Size: int64(len(f.data))}, nil
 	default:
 		return backend.Metadata{}, syscall.ENOENT
@@ -42,7 +46,7 @@ func (f *fake) ReadFile(_ context.Context, p string) ([]byte, error) {
 	if p == "" {
 		return nil, syscall.EISDIR
 	}
-	if p != "file" {
+	if p != "file" || f.deleted {
 		return nil, syscall.ENOENT
 	}
 	return append([]byte(nil), f.data...), nil
@@ -93,6 +97,16 @@ func TestSnapshotAndReadonlyMount(t *testing.T) {
 	}
 	if _, err = os.Create(filepath.Join(d, "new")); !errors.Is(err, syscall.EROFS) {
 		t.Errorf("create: %v", err)
+	}
+	f.mu.Lock()
+	f.deleted = true
+	f.mu.Unlock()
+	handleStat, err := h.Stat()
+	if err != nil || handleStat.Size() != 6 {
+		t.Errorf("open file stat after deletion: %v %v", handleStat, err)
+	}
+	if _, err := os.Stat(file); !errors.Is(err, syscall.ENOENT) {
+		t.Errorf("deleted path stat: %v", err)
 	}
 }
 func TestSnapshotBounds(t *testing.T) {

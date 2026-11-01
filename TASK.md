@@ -95,3 +95,5 @@ Oracle AI Data Platform (AIDP) Workbench の workspace をローカルから操�
 - 2026-11-01: Linux 実行環境で read-only FUSE の実 AIDP mount / unmount、4 ディレクトリ・6 ファイルの列挙と部分読み取り、存在しないパスの ENOENT、作成拒否 EROFS を確認。外部更新や binary checksum 等は未検証。詳細は [実 API 調査](docs/20261101_実APIと実装着手.md)。
 
 - 2026-11-01: 専用領域で WorkspaceObject のバイナリ作成と contents による読み取り、notebook PUT、cleanup を確認。file PUT は誤った `if-match` でも更新され、競合保護は未確認。[書き込み API 実測](docs/20261101_書き込みAPI実測.md)。
+
+- 2026-11-01: 実 AIDP・FUSE の専用領域で合成 binary の SHA-256、外部更新後の既存 handle と再 open、stat を確認し、unmount・cleanup 済み。1 件の小ファイルに限定。詳細は [書き込み API 実測](docs/20261101_書き込みAPI実測.md)。

@@ -20,7 +20,10 @@ type node struct {
 	reader backend.Reader
 	rel    string
 }
-type snapshot struct{ data []byte }
+type snapshot struct {
+	data     []byte
+	metadata backend.Metadata
+}
 
 func errno(err error) syscall.Errno {
 	if err == nil {
@@ -59,12 +62,13 @@ func attributes(out *fuse.Attr, m backend.Metadata) {
 	}
 }
 func (n *node) Getattr(ctx context.Context, fh fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
+	if s, ok := fh.(*snapshot); ok {
+		attributes(&out.Attr, s.metadata)
+		return 0
+	}
 	m, err := n.reader.Stat(ctx, n.rel)
 	if err != nil {
 		return errno(err)
-	}
-	if s, ok := fh.(*snapshot); ok {
-		m.Size = int64(len(s.data))
 	}
 	attributes(&out.Attr, m)
 	return 0
@@ -101,11 +105,19 @@ func (n *node) Open(ctx context.Context, flags uint32) (fs.FileHandle, uint32, s
 	if flags&syscall.O_ACCMODE != syscall.O_RDONLY || flags&(syscall.O_TRUNC|syscall.O_APPEND) != 0 {
 		return nil, 0, syscall.EROFS
 	}
+	metadata, err := n.reader.Stat(ctx, n.rel)
+	if err != nil {
+		return nil, 0, errno(err)
+	}
+	if metadata.Kind == backend.Directory {
+		return nil, 0, syscall.EISDIR
+	}
 	data, err := n.reader.ReadFile(ctx, n.rel)
 	if err != nil {
 		return nil, 0, errno(err)
 	}
-	return &snapshot{data: data}, fuse.FOPEN_DIRECT_IO, 0
+	metadata.Size = int64(len(data))
+	return &snapshot{data: data, metadata: metadata}, fuse.FOPEN_DIRECT_IO, 0
 }
 func (s *snapshot) Read(_ context.Context, dest []byte, off int64) (fuse.ReadResult, syscall.Errno) {
 	if off < 0 {
