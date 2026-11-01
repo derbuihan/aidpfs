@@ -238,6 +238,12 @@ def main():
                     raise RuntimeError('exclusive duplicate creation succeeded')
                 except FileExistsError:
                     pass
+                intent_files = [name for name in os.listdir(recovery_dir) if name.startswith('create-') and name.endswith('.json')]
+                if len(intent_files) != 1: raise RuntimeError('create intent count mismatch')
+                with open(os.path.join(recovery_dir, intent_files[0])) as intent_file:
+                    intent = json.load(intent_file)
+                if intent.get('remote_path') != created_path or not os.path.isfile(os.path.join(recovery_dir, intent_files[0][:-5] + '.done')):
+                    raise RuntimeError('confirmed create intent missing')
                 print('experimental CLI create, write, fsync and duplicate rejection succeeded', flush=True)
                 with open(os.path.join(write_mount_dir, 'upload-par.bin'), 'r+b', buffering=0) as handle:
                     handle.seek(0)

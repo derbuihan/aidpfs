@@ -29,6 +29,14 @@ func TestRecoveryCommands(t *testing.T) {
 	if !strings.Contains(out.String(), id) || strings.Contains(out.String(), "hidden content") {
 		t.Fatal("list output incorrect")
 	}
+	intentID, err := s.BeginCreate("platform", "workspace", "/Workspace/new")
+	if err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	if err = runRecovery([]string{"list", "--dir", d}, &out); err != nil || !strings.Contains(out.String(), intentID) || !strings.Contains(out.String(), `"confirmed":false`) {
+		t.Fatalf("create intent missing: %v", err)
+	}
 	out.Reset()
 	if err = runRecovery([]string{"lineage", "--dir", d, "--id", id}, &out); err != nil {
 		t.Fatal(err)

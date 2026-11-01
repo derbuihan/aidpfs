@@ -68,7 +68,20 @@ func run() error {
 		fmt.Fprintln(os.Stderr, "WARNING: experimental writes are incomplete; use isolated test data only. Recovery entries must be reviewed manually.")
 		server, err = mount.MountExperimental(context.Background(), c.MountPoint, r, func(ctx context.Context, rel string) (*writeback.Buffer, error) {
 			return r.OpenExperimentalBuffer(ctx, rel, c.Region, store)
-		}, r.CreateEmptyExperimental)
+		}, func(ctx context.Context, rel string) error {
+			remote, resolveErr := config.Resolve(c.RemotePath, rel)
+			if resolveErr != nil {
+				return resolveErr
+			}
+			intentID, intentErr := store.BeginCreate(c.PlatformID, c.WorkspaceKey, remote)
+			if intentErr != nil {
+				return intentErr
+			}
+			if createErr := r.CreateEmptyExperimental(ctx, rel); createErr != nil {
+				return createErr
+			}
+			return store.ConfirmCreate(intentID)
+		})
 	} else {
 		server, err = mount.Mount(context.Background(), c.MountPoint, r)
 	}

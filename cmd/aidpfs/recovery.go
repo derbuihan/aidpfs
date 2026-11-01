@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -52,6 +53,16 @@ func runRecovery(args []string, out io.Writer) error {
 				fmt.Fprintf(out, "%s incomplete-or-invalid\n", e.ID)
 			} else {
 				fmt.Fprintf(out, "%s %s %d bytes generation=%d previous=%s\n", e.ID, e.Stage, e.Size, e.Generation, e.PreviousID)
+			}
+		}
+		creates, err := store.ListCreates()
+		if err != nil {
+			return err
+		}
+		enc := json.NewEncoder(out)
+		for _, item := range creates {
+			if err = enc.Encode(item); err != nil {
+				return err
 			}
 		}
 		return nil

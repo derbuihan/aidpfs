@@ -87,6 +87,8 @@ Oracle AI Data Platform (AIDP) Workbench の workspace をローカルから操�
 
 ## 完了
 
+- 2026-11-02: FUSE FILE create 前に対象を durable journal に記録し、成功応答の受信を別 marker に保存。`recovery list` で未確認・確認済みを表示。実 AIDP の専用領域で create と記録、cleanup を確認。通信中断・電源断の実環境試験と自動復旧は未検証。[詳細](docs/20261101_復旧データ基盤.md)。
+
 - 2026-11-02: 試験的 FUSE に通常 FILE の create を接続。実 AIDP の専用領域で CLI mount から create・write・fsync・別 API 読取・重複拒否と cleanup を確認。作成結果不明の journal・回復、並行作成やエディタ E2E は未完了。[詳細](docs/20261101_復旧データ基盤.md)。
 
 - 2026-11-02: 上書き禁止の空 FILE 新規作成 backend を追加。mock で重複・切断・5xx の非再試行、実 AIDP の専用領域で作成・空内容・重複拒否・cleanup を確認。FUSE create、作成結果不明の復旧と複数 client 競合は未実装。[詳細](docs/20261101_復旧データ基盤.md)。
