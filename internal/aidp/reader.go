@@ -8,9 +8,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"path"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -45,7 +47,9 @@ func NewWithClient(endpoint, platform, workspace, root string, signer Signer, cl
 	if _, err := config.Resolve(root, ""); err != nil {
 		return nil, err
 	}
-	return &Reader{base: strings.TrimRight(endpoint, "/") + "/20260430/aiDataPlatforms/" + url.PathEscape(platform) + "/workspaces/" + url.PathEscape(workspace), root: root, signer: signer, client: client}, nil
+	safeClient := *client
+	safeClient.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	return &Reader{base: strings.TrimRight(endpoint, "/") + "/20260430/aiDataPlatforms/" + url.PathEscape(platform) + "/workspaces/" + url.PathEscape(workspace), root: root, signer: signer, client: &safeClient}, nil
 }
 
 type APIError struct {
@@ -75,22 +79,71 @@ func (e *APIError) Unwrap() error {
 // A response bound limits resource use until a streaming transfer is implemented.
 const maxResponse = 64 << 20
 
+// Only idempotent GET requests use this retry loop. Each attempt is signed
+// separately and redirects are refused to avoid forwarding credentials.
 func (r *Reader) get(ctx context.Context, endpoint string, query url.Values, out any) (http.Header, error) {
+	const maxAttempts = 3
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		header, retry, errResult := r.getOnce(ctx, endpoint, query, out)
+		if !retry || attempt == maxAttempts-1 {
+			return header, errResult
+		}
+		delay := time.Duration(100<<attempt) * time.Millisecond
+		if h := header.Get("Retry-After"); h != "" {
+			if seconds, err := strconv.Atoi(h); err == nil && seconds >= 0 {
+				if seconds > 2 {
+					return nil, errResult
+				}
+				requested := time.Duration(seconds) * time.Second
+				if requested > delay {
+					delay = requested
+				}
+			} else if until, err := http.ParseTime(h); err == nil {
+				requested := time.Until(until)
+				if requested > 2*time.Second {
+					return nil, errResult
+				}
+				if requested > delay {
+					delay = requested
+				}
+			}
+		}
+		timer := time.NewTimer(delay)
+		select {
+		case <-ctx.Done():
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+			return nil, ctx.Err()
+		case <-timer.C:
+		}
+	}
+	panic("unreachable")
+}
+
+func (r *Reader) getOnce(ctx context.Context, endpoint string, query url.Values, out any) (http.Header, bool, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint+"?"+query.Encode(), nil)
 	if err != nil {
-		return nil, syscall.EINVAL
+		return nil, false, syscall.EINVAL
 	}
 	req.Header.Set("Date", time.Now().UTC().Format(http.TimeFormat))
 	req.Header.Set("should-update-recent", "false")
 	if err = r.signer.Sign(req); err != nil {
-		return nil, errors.New("unable to sign AIDP request")
+		return nil, false, errors.New("unable to sign AIDP request")
 	}
 	resp, err := r.client.Do(req)
 	if err != nil {
 		if ctx.Err() != nil {
-			return nil, ctx.Err()
+			return nil, false, ctx.Err()
 		}
-		return nil, syscall.EIO
+		var ne net.Error
+		if errors.As(err, &ne) && ne.Timeout() {
+			return nil, true, syscall.ETIMEDOUT
+		}
+		return nil, true, syscall.EIO
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
@@ -98,19 +151,27 @@ func (r *Reader) get(ctx context.Context, endpoint string, query url.Values, out
 			Code string `json:"code"`
 		}
 		_ = json.NewDecoder(io.LimitReader(resp.Body, 4096)).Decode(&body)
-		return nil, &APIError{Status: resp.StatusCode, Code: body.Code, RequestID: resp.Header.Get("opc-request-id")}
+		retry := resp.StatusCode == 429 || resp.StatusCode == 500 || resp.StatusCode == 502 || resp.StatusCode == 503 || resp.StatusCode == 504
+		return resp.Header, retry, &APIError{Status: resp.StatusCode, Code: body.Code, RequestID: resp.Header.Get("opc-request-id")}
 	}
 	data, err := io.ReadAll(io.LimitReader(resp.Body, maxResponse+1))
 	if err != nil {
-		return nil, syscall.EIO
+		if ctx.Err() != nil {
+			return nil, false, ctx.Err()
+		}
+		var ne net.Error
+		if errors.As(err, &ne) && ne.Timeout() {
+			return nil, true, syscall.ETIMEDOUT
+		}
+		return nil, true, syscall.EIO
 	}
 	if len(data) > maxResponse {
-		return nil, syscall.EFBIG
+		return nil, false, syscall.EFBIG
 	}
 	if err = json.Unmarshal(data, out); err != nil {
-		return nil, syscall.EIO
+		return nil, false, syscall.EIO
 	}
-	return resp.Header, nil
+	return resp.Header, false, nil
 }
 
 type object struct {

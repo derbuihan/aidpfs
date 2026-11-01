@@ -101,3 +101,5 @@ Oracle AI Data Platform (AIDP) Workbench の workspace をローカルから操�
 - 2026-11-01: 専用 binary の download PAR 取得と署名なし転送、rename の不正 if-match と既存先衝突、WorkspaceObject PUT の条件付き更新を実測。PAR の期限・upload、rename の原子性、競合保護は未解決。[実測詳細](docs/20261101_書き込みAPI実測.md)。
 
 - 2026-11-01: upload PAR の新規 CREATE→署名なし PUT→UPDATE→contents 一致を 7 bytes で確認。重複 CREATE は 409、転送前中断では object が残り削除できた。既存ファイル上書き・障害後の完全な recovery・PAR 有効期限は未検証。[実測詳細](docs/20261101_書き込みAPI実測.md)。
+
+- 2026-11-01: 読み取り GET に限定した一時障害の再試行、timeout、redirect 拒否を追加し mock と `go test -race ./...` で確認。PAR・書き込み・実環境 429/5xx は未検証。[詳細](docs/20261101_読み取り再試行と安全性.md)。

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 
 	"aidpfs/internal/backend"
 )
@@ -167,3 +168,94 @@ func TestSyntheticDirectoryIsNotFound(t *testing.T) {
 		t.Fatalf("read: %v", err)
 	}
 }
+
+func TestRetryOnlyTransientStatuses(t *testing.T) {
+	for _, tt := range []struct {
+		status, attempts int
+		success          bool
+	}{{429, 3, true}, {500, 3, true}, {503, 3, true}, {403, 1, false}, {409, 1, false}} {
+		t.Run(fmt.Sprint(tt.status), func(t *testing.T) {
+			attempts := 0
+			r := serverReader(t, func(w http.ResponseWriter, req *http.Request) {
+				attempts++
+				if req.Method != http.MethodGet {
+					t.Errorf("unexpected method %s", req.Method)
+				}
+				if attempts < 3 || !tt.success {
+					w.WriteHeader(tt.status)
+					return
+				}
+				fmt.Fprint(w, `{"items":[]}`)
+			})
+			_, err := r.ReadDir(context.Background(), "")
+			if (err == nil) != tt.success || attempts != tt.attempts {
+				t.Fatalf("attempts=%d err=%v", attempts, err)
+			}
+		})
+	}
+}
+func TestRetryCancellationAndTimeout(t *testing.T) {
+	r := serverReader(t, func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusTooManyRequests) })
+	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Millisecond)
+	defer cancel()
+	if _, err := r.ReadDir(ctx, ""); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("error %v", err)
+	}
+	r = serverReader(t, func(w http.ResponseWriter, _ *http.Request) {
+		time.Sleep(25 * time.Millisecond)
+		fmt.Fprint(w, `{"items":[]}`)
+	})
+	r.client.Timeout = 5 * time.Millisecond
+	if _, err := r.ReadDir(context.Background(), ""); !errors.Is(err, syscall.ETIMEDOUT) {
+		t.Fatalf("error %v", err)
+	}
+}
+func TestRedirectDoesNotForwardSignedHeaders(t *testing.T) {
+	visited := false
+	other := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { visited = true }))
+	defer other.Close()
+	r := serverReader(t, func(w http.ResponseWriter, req *http.Request) { http.Redirect(w, req, other.URL, http.StatusFound) })
+	_, err := r.ReadDir(context.Background(), "")
+	if err == nil || visited {
+		t.Fatalf("redirect followed or not rejected: %v", err)
+	}
+}
+
+func TestRetryAfterLongDelayDoesNotRetryEarly(t *testing.T) {
+	calls := 0
+	r := serverReader(t, func(w http.ResponseWriter, _ *http.Request) {
+		calls++
+		w.Header().Set("Retry-After", "30")
+		w.WriteHeader(http.StatusTooManyRequests)
+	})
+	if _, err := r.ReadDir(context.Background(), ""); !errors.Is(err, syscall.EAGAIN) || calls != 1 {
+		t.Fatalf("calls=%d error=%v", calls, err)
+	}
+}
+func TestTruncatedResponseIsRetried(t *testing.T) {
+	calls := 0
+	r := serverReader(t, func(w http.ResponseWriter, _ *http.Request) {
+		calls++
+		if calls == 1 {
+			w.Header().Set("Content-Length", "100")
+			fmt.Fprint(w, `{"items":`)
+			return
+		}
+		fmt.Fprint(w, `{"items":[]}`)
+	})
+	if _, err := r.ReadDir(context.Background(), ""); err != nil || calls != 2 {
+		t.Fatalf("calls=%d error=%v", calls, err)
+	}
+}
+func TestSignerErrorIsRedacted(t *testing.T) {
+	r := serverReader(t, func(http.ResponseWriter, *http.Request) { t.Error("must not send") })
+	r.signer = failingSigner{}
+	_, err := r.ReadDir(context.Background(), "")
+	if err == nil || strings.Contains(err.Error(), "sensitive") {
+		t.Fatalf("error %v", err)
+	}
+}
+
+type failingSigner struct{}
+
+func (failingSigner) Sign(*http.Request) error { return errors.New("sensitive signing material") }
