@@ -87,6 +87,8 @@ Oracle AI Data Platform (AIDP) Workbench の workspace をローカルから操�
 
 ## 完了
 
+- 2026-11-02: AIDP に容量・quota の情報がないため `statfs` の全ゼロ成功を避け、read-only / experimental mount とも `EOPNOTSUPP` を明示。ローカル実 FUSE の双方で `statfs(2)` の errno を確認。名前衝突など属性項目の残りは引き続き未検証。[詳細](docs/20261101_実装タスク追加調査.md)。
+
 - 2026-11-02: create 処理が remote request より前に durable intent を記録し、成功応答後だけ確認 marker を記録することを fake HTTP server と子プロセス強制終了で確認。要求受信後・応答前の終了でも intent が残り、unmount 後検査が未確認として報告。これはローカル模擬サーバーのプロセス停止試験で、実 AIDP の通信中断や電源断は未検証。[詳細](docs/20261101_復旧データ基盤.md)。
 
 - 2026-11-02: 試験的 mount 停止後、新規の状態変更を拒否し実行中の操作を待ってから journal と dirty 状態を検査する gate を追加。ブロックした create の待機・遅延操作拒否を race test、実 AIDP の正常 mount/unmount と cleanup を確認。実通信停止中の終了・強制終了は未検証。[詳細](docs/20261101_復旧データ基盤.md)。

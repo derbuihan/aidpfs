@@ -67,6 +67,10 @@ func TestSnapshotAndReadonlyMount(t *testing.T) {
 		}
 		srv.Wait()
 	}()
+	var fsStat syscall.Statfs_t
+	if err := syscall.Statfs(d, &fsStat); !errors.Is(err, syscall.EOPNOTSUPP) {
+		t.Fatalf("statfs error = %v, want EOPNOTSUPP", err)
+	}
 	file := filepath.Join(d, "file")
 	h, err := os.Open(file)
 	if err != nil {

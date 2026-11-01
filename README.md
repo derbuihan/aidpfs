@@ -29,6 +29,7 @@ Unmount in a second terminal with `fusermount3 -u "$HOME/aidp-mount"`, or stop t
 ## Current behavior and limitations
 
 - Mount access is restricted to the mounting user; directories are mode 0500 and files 0400. `allow_other`, volumes and multiple workspaces are not supported.
+- `statfs` returns `EOPNOTSUPP`: the AIDP workspace API does not provide filesystem capacity or quota, and reporting zero-valued capacity fields would be misleading.
 - Files are fetched in full on open and held in memory for that open. Each open gets a snapshot; a later open fetches again. Metadata and negative lookup TTLs are zero and direct I/O bypasses the kernel page cache. Concurrent changes between separate API operations can still produce inconsistent results.
 - `stat` fetches file contents to report the size actually returned. API responses larger than 64 MiB fail with `EFBIG`, so binary file size limits depend on the encoded response. This approach can use substantial memory and API requests.
 - Notebooks are exposed as the JSON content returned by the contents API. They may not have the same byte representation as the original stored notebook. In one synthetic API test, cell representation and metadata changed and the PAR JSON differed from contents JSON. Saving and full round-trip preservation remain unverified.

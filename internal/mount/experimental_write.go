@@ -121,6 +121,10 @@ type editHandle struct {
 	metadata  backend.Metadata
 }
 
+func (n *experimentalNode) Statfs(ctx context.Context, out *fuse.StatfsOut) syscall.Errno {
+	return unsupportedStatfs(ctx, out)
+}
+
 func editAttrs(out *fuse.Attr, m backend.Metadata, b *writeback.Buffer) {
 	attributes(out, m)
 	if m.Kind == backend.Directory {

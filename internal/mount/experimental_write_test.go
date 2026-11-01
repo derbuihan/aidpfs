@@ -83,6 +83,10 @@ func testExperimentalMountReader(t *testing.T, remote *mountRemote, reader *fake
 		}
 		server.Wait()
 	})
+	var fsStat syscall.Statfs_t
+	if e := syscall.Statfs(d, &fsStat); !errors.Is(e, syscall.EOPNOTSUPP) {
+		t.Fatalf("experimental statfs error = %v, want EOPNOTSUPP", e)
+	}
 	return d, store
 }
 func TestExperimentalMountWriteSyncAndTruncate(t *testing.T) {

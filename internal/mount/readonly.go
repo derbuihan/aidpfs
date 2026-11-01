@@ -61,6 +61,17 @@ func attributes(out *fuse.Attr, m backend.Metadata) {
 		out.SetTimes(nil, &m.Modified, nil)
 	}
 }
+
+// The backend exposes workspace objects but no filesystem quota or capacity.
+// Returning a zero-valued statfs result would misrepresent that unknown data.
+func unsupportedStatfs(context.Context, *fuse.StatfsOut) syscall.Errno {
+	return syscall.EOPNOTSUPP
+}
+
+func (n *node) Statfs(ctx context.Context, out *fuse.StatfsOut) syscall.Errno {
+	return unsupportedStatfs(ctx, out)
+}
+
 func (n *node) Getattr(ctx context.Context, fh fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
 	if s, ok := fh.(*snapshot); ok {
 		attributes(&out.Attr, s.metadata)
