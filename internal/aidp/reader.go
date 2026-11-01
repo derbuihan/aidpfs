@@ -25,9 +25,10 @@ import (
 type Signer interface{ Sign(*http.Request) error }
 
 type Reader struct {
-	base, root string
-	client     *http.Client
-	signer     Signer
+	base, root               string
+	platformID, workspaceKey string
+	client                   *http.Client
+	signer                   Signer
 }
 
 // New requires an HTTPS origin; tests can use NewWithClient with an injected server.
@@ -49,7 +50,7 @@ func NewWithClient(endpoint, platform, workspace, root string, signer Signer, cl
 	}
 	safeClient := *client
 	safeClient.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
-	return &Reader{base: strings.TrimRight(endpoint, "/") + "/20260430/aiDataPlatforms/" + url.PathEscape(platform) + "/workspaces/" + url.PathEscape(workspace), root: root, signer: signer, client: &safeClient}, nil
+	return &Reader{base: strings.TrimRight(endpoint, "/") + "/20260430/aiDataPlatforms/" + url.PathEscape(platform) + "/workspaces/" + url.PathEscape(workspace), root: root, platformID: platform, workspaceKey: workspace, signer: signer, client: &safeClient}, nil
 }
 
 type APIError struct {

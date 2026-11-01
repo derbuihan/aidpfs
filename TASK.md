@@ -115,3 +115,5 @@ Oracle AI Data Platform (AIDP) Workbench の workspace をローカルから操�
 - 2026-11-01: 2 client の同時 PAR 条件付き PUT は 2 回とも一方成功・一方 412。PUT 後に別 client が変更してから古い metadata UPDATE を送ると 200 でも別 client の内容が残った。Go PAR GET に ETag の版照合を追加し mock / 実 API で確認。全体の atomicity と recovery は未解決。[詳細](docs/20261101_書き込みAPI実測.md)。
 
 - 2026-11-01: owner-only の復旧内容・状態を fsync / 原子的 metadata 更新で保存する内部基盤を追加。再 Open・破損・symlink・並列状態更新を単体検証。FUSE・通信・再起動 recovery には未接続。[詳細](docs/20261101_復旧データ基盤.md)。
+
+- 2026-11-01: recovery journal と条件付き PAR 保存・更新後照合を内部 coordinator で接続し、fake 障害試験と実 AIDP の専用 FILE で保存・復元を確認。FUSE 接続・中断後の recovery・エディタ E2E は未実装。[詳細](docs/20261101_復旧データ基盤.md)。

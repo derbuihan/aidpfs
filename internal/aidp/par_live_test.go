@@ -9,6 +9,9 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"aidpfs/internal/recovery"
+	"aidpfs/internal/writeback"
 )
 
 // This integration test only runs inside the isolated probe's UUID directory.
@@ -79,6 +82,34 @@ func TestLivePARIsolatedFixture(t *testing.T) {
 	if err != nil || !bytes.Equal(data, original) {
 		t.Fatalf("restore read mismatch: %v", err)
 	}
+	// Exercise durable writeback orchestration on this synthetic file.
+	recoveryDir := t.TempDir()
+	if err = os.Chmod(recoveryDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	journal, err := recovery.Open(recoveryDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	saver := writeback.Saver{Journal: journal, Remote: &parWriter{reader: r, transport: par}}
+	target := writeback.Target{PlatformID: platform, WorkspaceKey: key, RemotePath: root + "/upload-par.bin"}
+	journalID, err := saver.SaveExisting(ctx, target, restored, []byte("journalled update"))
+	if err != nil {
+		t.Fatalf("journalled save failed (id retained=%v): %v", journalID != "", err)
+	}
+	record, contents, err := journal.Load(journalID)
+	if err != nil || record.Stage != recovery.Verified || !bytes.Equal(contents, []byte("journalled update")) {
+		t.Fatalf("journal verification failed: %v", err)
+	}
+	restoreID, err := saver.SaveExisting(ctx, target, record.PutETag, original)
+	if err != nil {
+		t.Fatalf("journalled restore failed (id retained=%v): %v", restoreID != "", err)
+	}
+	record, _, err = journal.Load(restoreID)
+	if err != nil || record.Stage != recovery.Verified {
+		t.Fatalf("restore journal failed: %v", err)
+	}
+	t.Log("journalled conditional save, verify and restore succeeded")
 	// Two independent clients start with the same storage version.
 	meta, err = r.parMetadataRequest(ctx, par, "upload-par.bin", "DOWNLOAD", "", 0)
 	if err != nil {

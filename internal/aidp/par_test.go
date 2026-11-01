@@ -54,6 +54,9 @@ func TestPARConditionalTransfer(t *testing.T) {
 	if !errors.Is(e, syscall.ESTALE) {
 		t.Fatalf("conflict %v", e)
 	}
+	if _, e = p.putExisting(context.Background(), u, "*", nil); e == nil {
+		t.Fatal("wildcard ETag accepted")
+	}
 	if calls.Load() != 3 {
 		t.Fatalf("unexpected attempts %d", calls.Load())
 	}

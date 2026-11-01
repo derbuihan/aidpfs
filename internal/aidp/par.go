@@ -85,16 +85,17 @@ func (p *parTransport) downloadVersioned(ctx context.Context, u parURL, expected
 		return nil, err
 	}
 	// OCI may quote the HTTP ETag while returning its metadata value unquoted.
-	normalize := func(s string) string {
-		if len(s) >= 2 && s[0] == '"' && s[len(s)-1] == '"' {
-			return s[1 : len(s)-1]
-		}
-		return s
-	}
-	if actual == "" || normalize(actual) != normalize(expectedETag) {
+	if actual == "" || normalizeETag(actual) != normalizeETag(expectedETag) {
 		return nil, syscall.ESTALE
 	}
 	return data, nil
+}
+
+func normalizeETag(s string) string {
+	if len(s) >= 2 && s[0] == '"' && s[len(s)-1] == '"' {
+		return s[1 : len(s)-1]
+	}
+	return s
 }
 func (p *parTransport) download(ctx context.Context, u parURL) ([]byte, error) {
 	data, _, err := p.downloadWithETag(ctx, u)
@@ -138,7 +139,7 @@ func (p *parTransport) putExisting(ctx context.Context, u parURL, oldETag string
 	if _, e := p.validate(u.raw); e != nil {
 		return "", e
 	}
-	if oldETag == "" || strings.ContainsAny(oldETag, "\r\n") {
+	if strings.TrimSpace(oldETag) == "" || strings.TrimSpace(oldETag) == "*" || strings.ContainsAny(oldETag, "\r\n") {
 		return "", errors.New("a valid ETag is required")
 	}
 	req, e := http.NewRequestWithContext(ctx, http.MethodPut, u.raw, bytes.NewReader(data))
