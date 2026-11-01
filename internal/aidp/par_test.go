@@ -99,6 +99,28 @@ func TestPARUnknownOutcomeNeverRetried(t *testing.T) {
 	}
 }
 
+func TestExpiredPARFailureIsNotRetriedOrExposed(t *testing.T) {
+	var calls atomic.Int32
+	s := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls.Add(1)
+		w.WriteHeader(http.StatusUnauthorized)
+		fmt.Fprint(w, `{"message":"expired bearer secret"}`)
+	}))
+	defer s.Close()
+	p, err := newPARTransport(s.URL, s.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	u, err := p.validate(s.URL + "/p/bearer-secret?token=private")
+	if err != nil {
+		t.Fatal("valid synthetic PAR URL rejected")
+	}
+	_, err = p.download(context.Background(), u)
+	if !errors.Is(err, syscall.EACCES) || strings.Contains(fmt.Sprint(err), "secret") || calls.Load() != 1 {
+		t.Fatalf("expired PAR response exposed or retried: calls=%d error=%v", calls.Load(), err)
+	}
+}
+
 func TestVersionedDownloadRejectsChangedOrMissingETag(t *testing.T) {
 	tag := `"version-two"`
 	s := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
