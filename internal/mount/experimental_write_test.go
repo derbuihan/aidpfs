@@ -242,3 +242,44 @@ func newMountBuffer(t *testing.T, remote *mountRemote) (*writeback.Buffer, *reco
 	}
 	return b, s
 }
+
+func TestExperimentalReadOnlyCloseDoesNotFlushOtherHandle(t *testing.T) {
+	remote := &mountRemote{tag: "old"}
+	d, store := testExperimentalMount(t, remote)
+	name := filepath.Join(d, "file")
+	writer, err := os.OpenFile(name, os.O_RDWR, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer writer.Close()
+	reader, err := os.Open(name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = writer.WriteAt([]byte("new"), 0); err != nil {
+		t.Fatal(err)
+	}
+	if err = reader.Close(); err != nil {
+		t.Fatal(err)
+	}
+	remote.mu.Lock()
+	puts := remote.puts
+	remote.mu.Unlock()
+	if puts != 0 {
+		t.Fatal("read-only close flushed another handle's dirty data")
+	}
+	entries, err := store.List()
+	if err != nil || len(entries) != 1 || entries[0].Stage != recovery.Prepared {
+		t.Fatalf("dirty data not retained: %v %v", entries, err)
+	}
+	if err = writer.Sync(); err != nil {
+		t.Fatal(err)
+	}
+	remote.mu.Lock()
+	puts = remote.puts
+	got := string(remote.data)
+	remote.mu.Unlock()
+	if puts != 1 || got != "newd" {
+		t.Fatalf("writer sync: puts=%d bytes=%q", puts, got)
+	}
+}

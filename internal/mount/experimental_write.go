@@ -196,6 +196,9 @@ func (n *experimentalNode) Flush(ctx context.Context, fh fs.FileHandle) syscall.
 	if !ok {
 		return syscall.EBADF
 	}
+	if !h.writable {
+		return 0
+	}
 	return errno(h.buffer.Sync(ctx))
 }
 func (n *experimentalNode) Fsync(ctx context.Context, fh fs.FileHandle, _ uint32) syscall.Errno {

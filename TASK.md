@@ -87,6 +87,8 @@ Oracle AI Data Platform (AIDP) Workbench の workspace をローカルから操�
 
 ## 完了
 
+- 2026-11-02: 試験用 FUSE の読み取り専用 handle の close が、別の書き込み handle の dirty buffer を送信しないよう修正。ローカル実 mount と fake backend で journal 保持・後続 fsync を確認。実 AIDP やエディタでの同条件は未検証。[詳細](docs/20261101_復旧データ基盤.md)。
+
 - 2026-11-01: 実 AIDP の専用領域で非空フォルダへの contents DELETE が 204 を返し、フォルダと子が取得できなくなることを確認。`rmdir` の事前空確認だけでは他 client の同時作成を保護できないため、競合安全な実装は未完了。[詳細](docs/20261101_書き込みAPI実測.md)。
 
 - 2026-11-01: 復旧 journal の指定世代から先祖の内容・対象・世代連鎖を検証する `recovery lineage` を追加し、欠損・不整合の拒否をローカルで確認。別分岐の検出や最新版の決定、自動復旧は未実装。[詳細](docs/20261101_復旧データ基盤.md)。
