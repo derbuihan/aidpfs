@@ -134,6 +134,16 @@ func TestRepeatedPageAndInvalidEntries(t *testing.T) {
 		}
 	}
 }
+
+func TestDuplicateDisplayNameRejected(t *testing.T) {
+	r := serverReader(t, func(w http.ResponseWriter, _ *http.Request) {
+		fmt.Fprint(w, `{"items":[{"displayName":"same","path":"/Workspace/same","type":"FILE"},{"displayName":"same","path":"/Workspace/same","type":"NOTEBOOK"}]}`)
+	})
+	if _, err := r.ReadDir(context.Background(), ""); !errors.Is(err, syscall.EIO) {
+		t.Fatalf("duplicate display name error = %v, want EIO", err)
+	}
+}
+
 func TestCancellationAndDirectoryRead(t *testing.T) {
 	r := serverReader(t, func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasSuffix(r.URL.Path, "/objects") {
