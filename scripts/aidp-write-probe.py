@@ -133,6 +133,7 @@ def main():
         upload_path = root + '/upload-par.bin'
         upload_bytes = bytes([23, 0, 255, 42, 128, 91, 13])
         upload_headers = {'path': upload_path, 'type': 'FILE'}
+        put_etag = None
         created = request('POST', base + '/actions/uploadFileMeta',
             params={'isOverwrite': 'false', 'shouldCreateRecursively': 'false', 'shouldGenerateNewPar': 'true'},
             headers=upload_headers, json={'action': 'CREATE'})
@@ -178,6 +179,85 @@ def main():
                 model = verify.json()
                 restored = base64.b64decode(model['content']) if model.get('format') == 'base64' else model['content'].encode()
                 print('upload duplicate create status', duplicate.status_code, 'previous data preserved', restored == upload_bytes, flush=True)
+        # REFRESH may obtain an upload PAR without replacing the existing file.
+        if created.status_code in (200, 201) and put_etag:
+            current_meta = request('POST', base + '/actions/downloadFileMeta',
+                params={'shouldGenerateNewPar': 'true'}, headers=upload_headers)
+            current_tag = current_meta.json().get('eTag') if current_meta.ok else None
+            print('download metadata eTag matches storage PUT eTag', bool(current_tag) and current_tag.strip('"') == put_etag.strip('"'), flush=True)
+            refreshed = request('POST', base + '/actions/uploadFileMeta',
+                params={'isOverwrite': 'true', 'shouldCreateRecursively': 'false', 'shouldGenerateNewPar': 'true'},
+                headers=upload_headers, json={'action': 'REFRESH'})
+            refresh_url = refreshed.json().get('parUrl') if refreshed.ok else None
+            check = request('GET', contents(upload_path), params={'content': 1})
+            prior = None
+            if check.ok:
+                model = check.json()
+                prior = base64.b64decode(model['content']) if model.get('format') == 'base64' else model['content'].encode()
+            print('REFRESH status', refreshed.status_code, 'PAR present', bool(refresh_url), 'old bytes preserved', prior == upload_bytes, flush=True)
+            if refresh_url and prior == upload_bytes:
+                parsed = urlsplit(refresh_url)
+                if parsed.scheme != 'https' or parsed.hostname != 'objectstorage.' + a.region + '.oraclecloud.com' or parsed.username or parsed.password or parsed.port:
+                    raise RuntimeError('unexpected REFRESH PAR origin')
+                try:
+                    with requests.Session() as par_client:
+                        par_client.trust_env = False
+                        bad = par_client.put(refresh_url, data=b'wrong', headers={'if-match': '"aidpfs-wrong-etag"'}, timeout=20, allow_redirects=False)
+                        valid = par_client.put(refresh_url, data=b'refresh-write', headers={'if-match': put_etag}, timeout=20, allow_redirects=False)
+                        stale = par_client.put(refresh_url, data=b'stale', headers={'if-match': put_etag}, timeout=20, allow_redirects=False)
+                        print('REFRESH PAR wrong/valid/stale status', bad.status_code, valid.status_code, stale.status_code, flush=True)
+                        if valid.status_code in (200, 201, 204) and valid.headers.get('etag') and stale.status_code not in (200, 201, 204):
+                            closed = request('POST', base + '/actions/uploadFileMeta', headers=upload_headers,
+                                params={'shouldCreateRecursively': 'false'}, json={'action': 'UPDATE', 'eTag': valid.headers['etag'], 'size': len(b'refresh-write')})
+                            print('REFRESH close status', closed.status_code, flush=True)
+                    check = request('GET', contents(upload_path), params={'content': 1})
+                    if check.ok:
+                        model = check.json()
+                        actual = base64.b64decode(model['content']) if model.get('format') == 'base64' else model['content'].encode()
+                        print('REFRESH final new bytes', actual == b'refresh-write', flush=True)
+                except requests.RequestException as exc:
+                    print('REFRESH PAR transfer failed', type(exc).__name__, flush=True)
+                # Restore only our own synthetic file before the overwrite probe.
+                reset_url = base + '/objects/' + quote(upload_path, safe='')
+                reset = request('PUT', reset_url, headers={'Content-Type': 'application/octet-stream'}, data=upload_bytes)
+                if reset.status_code not in (200, 201): raise RuntimeError('failed to restore upload fixture')
+        # Test conditional writes via Object Storage PAR against this run's
+        # existing file, not against any pre-existing workspace data.
+        if created.status_code in (200, 201) and put_etag:
+            overwrite = request('POST', base + '/actions/uploadFileMeta',
+                params={'isOverwrite': 'true', 'shouldCreateRecursively': 'false', 'shouldGenerateNewPar': 'true'},
+                headers=upload_headers, json={'action': 'CREATE'})
+            before_overwrite = request('GET', contents(upload_path), params={'content': 1})
+            if before_overwrite.ok:
+                m = before_overwrite.json()
+                before_bytes = base64.b64decode(m['content']) if m.get('format') == 'base64' else m['content'].encode()
+                print('overwrite PAR creation preserves old data', before_bytes == upload_bytes, 'observed size', len(before_bytes), flush=True)
+            overwrite_url = overwrite.json().get('parUrl') if overwrite.ok else None
+            print('overwrite PAR creation status', overwrite.status_code, 'PAR present', bool(overwrite_url), flush=True)
+            if overwrite_url:
+                parsed = urlsplit(overwrite_url)
+                if parsed.scheme != 'https' or parsed.hostname != 'objectstorage.' + a.region + '.oraclecloud.com' or parsed.username or parsed.password or parsed.port:
+                    raise RuntimeError('unexpected overwrite PAR origin')
+                try:
+                    with requests.Session() as par_client:
+                        par_client.trust_env = False
+                        denied = par_client.put(overwrite_url, data=b'bad-condition', headers={'if-match': '"aidpfs-wrong-etag"'}, timeout=20, allow_redirects=False)
+                        print('PAR wrong if-match status', denied.status_code, flush=True)
+                        valid = par_client.put(overwrite_url, data=b'conditional-update', headers={'if-match': put_etag}, timeout=20, allow_redirects=False)
+                        print('PAR original if-match status', valid.status_code, flush=True)
+                        stale = par_client.put(overwrite_url, data=b'stale-write', headers={'if-match': put_etag}, timeout=20, allow_redirects=False)
+                        print('PAR reused if-match status', stale.status_code, flush=True)
+                        if valid.status_code in (200, 201, 204) and valid.headers.get('etag') and stale.status_code not in (200, 201, 204):
+                            closed = request('POST', base + '/actions/uploadFileMeta', headers=upload_headers,
+                                params={'shouldCreateRecursively': 'false'}, json={'action': 'UPDATE', 'eTag': valid.headers['etag'], 'size': len(b'conditional-update')})
+                            print('conditional upload close status', closed.status_code, flush=True)
+                    verify = request('GET', contents(upload_path), params={'content': 1})
+                    if verify.ok:
+                        model = verify.json()
+                        final_bytes = base64.b64decode(model['content']) if model.get('format') == 'base64' else model['content'].encode()
+                        print('PAR conditional final expected data', final_bytes == b'conditional-update', 'original data', final_bytes == upload_bytes, flush=True)
+                except requests.RequestException as exc:
+                    print('conditional PAR transfer failed', type(exc).__name__, flush=True)
         interrupted_path = root + '/upload-interrupted.bin'
         interrupted = request('POST', base + '/actions/uploadFileMeta',
             params={'isOverwrite': 'false', 'shouldCreateRecursively': 'false', 'shouldGenerateNewPar': 'true'},
