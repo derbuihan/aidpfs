@@ -129,6 +129,10 @@ func (r *Reader) ReadDir(ctx context.Context, rel string) ([]backend.Metadata, e
 	if err != nil {
 		return nil, syscall.EINVAL
 	}
+	return r.listRemote(ctx, remote)
+}
+
+func (r *Reader) listRemote(ctx context.Context, remote string) ([]backend.Metadata, error) {
 	var result []backend.Metadata
 	page := ""
 	seen := map[string]bool{}
@@ -239,7 +243,43 @@ func (r *Reader) fetch(ctx context.Context, rel string, include bool) (content, 
 	}
 	return c, data, nil
 }
+
+// Contents may report a synthetic directory for a nonexistent path. Confirm
+// membership in the parent's complete object listing before trusting it.
+func (r *Reader) listed(ctx context.Context, rel string) (backend.Kind, error) {
+	remote, err := config.Resolve(r.root, rel)
+	if err != nil {
+		return 0, syscall.EINVAL
+	}
+	if remote == "/" {
+		return backend.Directory, nil
+	}
+	// Workspace's virtual root is not necessarily listed by its parent. Verify
+	// that objects accepts the explicitly configured root instead.
+	if rel == "" {
+		_, err := r.listRemote(ctx, remote)
+		if err != nil {
+			return 0, err
+		}
+		return backend.Directory, nil
+	}
+	entries, err := r.listRemote(ctx, path.Dir(remote))
+	if err != nil {
+		return 0, err
+	}
+	for _, entry := range entries {
+		if entry.Name == path.Base(remote) {
+			return entry.Kind, nil
+		}
+	}
+	return 0, syscall.ENOENT
+}
+
 func (r *Reader) Stat(ctx context.Context, rel string) (backend.Metadata, error) {
+	listedKind, err := r.listed(ctx, rel)
+	if err != nil {
+		return backend.Metadata{}, err
+	}
 	c, _, err := r.fetch(ctx, rel, false)
 	if err != nil {
 		return backend.Metadata{}, err
@@ -262,9 +302,19 @@ func (r *Reader) Stat(ctx context.Context, rel string) (backend.Metadata, error)
 	default:
 		return backend.Metadata{}, syscall.ENOTSUP
 	}
+	if kind != listedKind {
+		return backend.Metadata{}, syscall.ESTALE
+	}
 	return backend.Metadata{Name: c.Name, Kind: kind, Size: int64(len(data)), Modified: c.Modified}, nil
 }
 func (r *Reader) ReadFile(ctx context.Context, rel string) ([]byte, error) {
+	listedKind, err := r.listed(ctx, rel)
+	if err != nil {
+		return nil, err
+	}
+	if listedKind == backend.Directory {
+		return nil, syscall.EISDIR
+	}
 	c, _, err := r.fetch(ctx, rel, false)
 	if err != nil {
 		return nil, err
@@ -278,6 +328,9 @@ func (r *Reader) ReadFile(ctx context.Context, rel string) ([]byte, error) {
 	}
 	if c.Type == "directory" {
 		return nil, syscall.EISDIR
+	}
+	if (c.Type == "file" && listedKind != backend.File) || (c.Type == "notebook" && listedKind != backend.Notebook) {
+		return nil, syscall.ESTALE
 	}
 	if c.Type != "file" && c.Type != "notebook" {
 		return nil, syscall.ENOTSUP

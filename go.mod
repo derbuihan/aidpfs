@@ -2,7 +2,10 @@ module aidpfs
 
 go 1.26.0
 
-require github.com/oracle/oci-go-sdk/v65 v65.128.0
+require (
+	github.com/hanwen/go-fuse/v2 v2.9.0
+	github.com/oracle/oci-go-sdk/v65 v65.128.0
+)
 
 require (
 	github.com/gofrs/flock v0.10.0 // indirect

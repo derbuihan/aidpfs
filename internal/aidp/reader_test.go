@@ -60,6 +60,14 @@ func TestContentAndSize(t *testing.T) {
 	} {
 		t.Run(tt.format, func(t *testing.T) {
 			r := serverReader(t, func(w http.ResponseWriter, r *http.Request) {
+				if strings.HasSuffix(r.URL.Path, "/objects") {
+					kind := "FILE"
+					if tt.typ == "notebook" {
+						kind = "NOTEBOOK"
+					}
+					fmt.Fprintf(w, `{"items":[{"displayName":"日本 %%#","path":"/Workspace/日本 %%#","type":%q}]}`, kind)
+					return
+				}
 				if !strings.Contains(r.URL.EscapedPath(), "Workspace%2F%E6%97%A5%E6%9C%AC%20%25%23") {
 					t.Errorf("unescaped content path: %s", r.URL.EscapedPath())
 				}
@@ -99,6 +107,10 @@ func TestErrorsAndTruncation(t *testing.T) {
 }
 func TestDirectoryStatDoesNotRequestContent(t *testing.T) {
 	r := serverReader(t, func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/objects") {
+			fmt.Fprint(w, `{"items":[]}`)
+			return
+		}
 		if r.URL.Query().Get("content") != "0" {
 			t.Error("directory content requested")
 		}
@@ -122,7 +134,11 @@ func TestRepeatedPageAndInvalidEntries(t *testing.T) {
 	}
 }
 func TestCancellationAndDirectoryRead(t *testing.T) {
-	r := serverReader(t, func(w http.ResponseWriter, _ *http.Request) {
+	r := serverReader(t, func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/objects") {
+			fmt.Fprint(w, `{"items":[]}`)
+			return
+		}
 		fmt.Fprint(w, `{"name":"Workspace","path":"Workspace","type":"directory"}`)
 	})
 	ctx, cancel := context.WithCancel(context.Background())
@@ -132,5 +148,22 @@ func TestCancellationAndDirectoryRead(t *testing.T) {
 	}
 	if _, e := r.ReadFile(context.Background(), ""); !errors.Is(e, syscall.EISDIR) {
 		t.Fatalf("unexpected error: %v", e)
+	}
+}
+
+func TestSyntheticDirectoryIsNotFound(t *testing.T) {
+	r := serverReader(t, func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/objects") {
+			fmt.Fprint(w, `{"items":[]}`)
+			return
+		}
+		t.Error("must not trust synthetic contents directory")
+		fmt.Fprint(w, `{"name":"missing","path":"Workspace/missing","type":"directory"}`)
+	})
+	if _, err := r.Stat(context.Background(), "missing"); !errors.Is(err, syscall.ENOENT) {
+		t.Fatalf("stat: %v", err)
+	}
+	if _, err := r.ReadFile(context.Background(), "missing"); !errors.Is(err, syscall.ENOENT) {
+		t.Fatalf("read: %v", err)
 	}
 }
