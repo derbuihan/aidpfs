@@ -80,6 +80,7 @@ def main():
     mount_process = None
     open_handle = None
     owned = set()
+    nested_pending = False
     try:
         if any(x.get('path') == root for x in listing('/Workspace/Shared')):
             raise RuntimeError('random probe root already exists')
@@ -88,6 +89,42 @@ def main():
             raise RuntimeError('probe root creation failed or ambiguous; inspect journal')
         created_root = True
         print('root created; empty listing:', len(listing(root)) == 0, flush=True)
+        # Determine whether contents DELETE rejects a non-empty directory.
+        # Both directory and child are generated under the isolated root.
+        nested = root + '/nonempty-test'
+        nested_child = nested + '/child.txt'
+        nested_pending = True
+        folder_response = request('POST', base + '/objects', headers={'path': nested, 'type': 'FOLDER', 'is-overwrite': 'false', 'Content-Type': 'application/octet-stream'}, data=b'')
+        if folder_response.status_code not in (200, 201): raise RuntimeError('nested folder creation failed or ambiguous')
+        owned.add(nested)
+        child_response = request('POST', base + '/objects', headers={'path': nested_child, 'type': 'FILE', 'is-overwrite': 'false', 'Content-Type': 'application/octet-stream'}, data=b'synthetic')
+        if child_response.status_code not in (200, 201): raise RuntimeError('nested child creation failed or ambiguous')
+        if {x.get('path') for x in listing(nested)} != {nested_child}: raise RuntimeError('unexpected nested contents')
+        deletion = request('DELETE', contents(nested))
+        parent_items = {x.get('path') for x in listing(root)}
+        folder_remains = nested in parent_items
+        child_remains = None
+        if folder_remains:
+            nested_items = listing(nested)
+            if any(x.get('path') != nested_child for x in nested_items): raise RuntimeError('unexpected nested contents after deletion')
+            child_remains = any(x.get('path') == nested_child for x in nested_items)
+            if child_remains:
+                r = request('DELETE', contents(nested_child))
+                if r.status_code not in (200, 204): raise RuntimeError('nested child cleanup failed')
+            if listing(nested): raise RuntimeError('nested folder not empty')
+            r = request('DELETE', contents(nested))
+            if r.status_code not in (200, 204): raise RuntimeError('nested folder cleanup failed')
+        else:
+            orphan_items = listing(nested)
+            orphan_read = request('GET', contents(nested_child), params={'content': 1})
+            print('deleted folder child listing count', len(orphan_items), 'child GET status', orphan_read.status_code, flush=True)
+            if orphan_items or orphan_read.status_code != 404:
+                raise RuntimeError('possible orphaned nested content; inspect private journal')
+        print('nonempty folder DELETE status', deletion.status_code, 'folder remains', folder_remains,
+              'child remains', child_remains, 'request-id', deletion.headers.get('opc-request-id'), flush=True)
+        if any(x.get('path') == nested for x in listing(root)): raise RuntimeError('nested folder still present')
+        owned.discard(nested)
+        nested_pending = False
         file_path = root + '/binary.bin'
         data = bytes([0, 1, 2, 127, 128, 255])
         r = request('POST', base + '/objects', headers={'path': file_path, 'type': 'FILE', 'is-overwrite': 'false', 'Content-Type': 'application/octet-stream'}, data=data)
@@ -482,6 +519,7 @@ def main():
             os.rmdir(mount_dir)
         if created_root:
             try:
+                if nested_pending: raise RuntimeError('nested probe outcome requires manual inspection')
                 children = listing(root)
                 unknown = [x for x in children if x.get('path') not in owned]
                 if unknown:
@@ -489,6 +527,8 @@ def main():
                     raise RuntimeError('unexpected entries')
                 else:
                     for x in children:
+                        if (x['path'] == root + '/nonempty-test' or x.get('type') in ('FOLDER', 'DIRECTORY')) and listing(x['path']):
+                            raise RuntimeError('refusing to delete nonempty folder')
                         r = request('DELETE', contents(x['path']))
                         if r.status_code not in (200, 204, 404): raise RuntimeError('child deletion failed')
                     if listing(root): raise RuntimeError('folder not empty after cleanup')
