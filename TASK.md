@@ -60,7 +60,7 @@ Oracle AI Data Platform (AIDP) Workbench の workspace をローカルから操�
 
 - [ ] **実機 suite**: wsfs を参考に、既存 mount 上の FUSE・cache・stress・security suite と、必要な起動 wrapper を作る。破壊的試験は専用領域に限定し、cleanup の成功も確認する。
 - [ ] **エディタ E2E**: VSCode 等で開く・編集・保存・再読込・rename を検証し、別 client と Workbench UI で結果を確認する。notebook の内容保持と競合時も対象とする。
-- [ ] **Git / 検索**: `git init/status/add/commit` と `rg` の動作・性能を検証し、未対応事項と local separate git dir などの推奨を決める。
+- [x] **Git / 検索**: 2026-11-02、実 AIDP の専用書き込み mount 上の合成 FILE を対象に、別置き Git リポジトリで init/status/add/commit と commit 内容、`rg` を検証。`rg` は単一 FILE で約 4.1 秒。mount 内 `.git`、checkout/merge、複数ファイル性能は未検証。別置き Git dir を推奨。[詳細](docs/20261101_復旧データ基盤.md)。
 - [ ] **セキュリティ**: mount owner 以外のアクセス、キャッシュの owner-only 権限、資格情報・PAR の漏えい、ログ・テスト出力を検証する。
 - [ ] **公開準備**: README にセットアップ、認証、利用方法、保証・制約、検証方法、障害復旧を記載し、コード・依存のライセンスと第三者通知を整える。Linux 配布・CI を検証する。`docs/` は公開対象外。
 
@@ -199,3 +199,5 @@ Oracle AI Data Platform (AIDP) Workbench の workspace をローカルから操�
 - 2026-11-01: 復旧 journal を版付き PAR snapshot と照合する CLI を追加。mock の分類と、実 AIDP の競合 journal に対する `remote_changed` を確認。自動復旧・他の実分類・Workbench 競合は未検証。[詳細](docs/20261101_復旧データ基盤.md)。
 
 - 2026-11-01: 合成 notebook の cells・metadata・outputs と PAR を実測し構造変換を確認。contents PUT で空白名は成功、日本語・%・# は各 400（他経路は未確認）。専用領域 cleanup 済み。[詳細](docs/20261101_書き込みAPI実測.md)。
+
+- 2026-11-02: 実 AIDP 専用 UUID 領域で読み書き FUSE、Vim 編集保存、Git、`rg`、PAR、Notebook REST、rename/delete の境界をまとめて再検証。通常終了時の全 fixture cleanup と親一覧からの消滅を確認。Notebook REST は初回保存で source/metadata/outputs が正規化され、contents PUT や WorkspaceObject PUT の不正 `if-match` も拒否されなかった。詳細と request ID は [書き込み API 実測](docs/20261101_書き込みAPI実測.md)。
