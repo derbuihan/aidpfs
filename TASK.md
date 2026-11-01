@@ -82,9 +82,10 @@ Oracle AI Data Platform (AIDP) Workbench の workspace をローカルから操�
 
 ## 既知の制限事項
 
-- 現時点で aidpfs の実装・実 AIDP API 接続・FUSE mount・エディタ E2E は未検証。公開 API 仕様は実動作を保証しない。
-- 調査時の Codex 実行環境では `/dev/fuse` が見えなかった。ホストの状態は別途確認する。
+- 基盤コードの一部と実 AIDP の読み取り API を確認済み。FUSE mount・エディタ E2E は未検証。公開 API 仕様は実動作を保証しない。
+- 以前の隔離された Codex 実行環境では `/dev/fuse` が見えなかった。2026-11-01 の今回の実行環境ではデバイスを読み書き可能だが、実 mount は未検証。
 
 ## 完了
 
-- 実装・検証の完了項目はまだない。
+- 2026-11-01: OCI_TOKYO / ap-osaka-1 で workspace 一覧、正しい workspace key による objects のページング、contents の既存 notebook・通常ファイルの読み取りを確認。全読み取りタスクの完了ではない。詳細は [実 API 調査](docs/20261101_実APIと実装着手.md)。
+- 2026-11-01: Go module、暫定 CLI と backend interface、設定・path の検証を追加。`go test ./...` はネットワーク・OCI 資格情報なしで成功。基盤タスクは未完了。
