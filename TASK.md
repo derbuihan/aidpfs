@@ -45,7 +45,7 @@ Oracle AI Data Platform (AIDP) Workbench の workspace をローカルから操�
 - [x] **実機 suite**: 2026-11-02、`scripts/tests/run.sh` を追加し、format/vet/race/build をまとめた。ローカル FUSE、snapshot・writeback、並行 read/write、journal/recovery、permission、PAR redirect/secret redaction tests を実行し成功。`--live` は厳密な UUID 専用 subtree と `/dev/fuse` を要求して、既存 live PAR/FUSE suite を明示実行する。通常 suite 成功は Workbench/E2E 成功を意味しない。[runner](scripts/tests/run.sh)、[validation](README.md)。
 - [ ] **エディタ E2E**: VSCode 等で開く・編集・保存・再読込・rename を検証し、別 client と Workbench UI で結果を確認する。notebook の内容保持と競合時も対象とする。
 - [x] **Git / 検索**: 2026-11-02、実 AIDP の専用書き込み mount 上の合成 FILE を対象に、別置き Git リポジトリで init/status/add/commit と commit 内容、`rg` を検証。`rg` は単一 FILE で約 4.1 秒。mount 内 `.git`、checkout/merge、複数ファイル性能は未検証。別置き Git dir を推奨。[詳細](docs/20261101_復旧データ基盤.md)。
-- [ ] **セキュリティ**: mount owner 以外のアクセス、キャッシュの owner-only 権限、資格情報・PAR の漏えい、ログ・テスト出力を検証する。
+- [x] **セキュリティ**: 2026-11-02、別 UID 65534 から owner-only read-only mount のファイルが読めないことを実 FUSE で確認。recovery directory/files は owner-only で、symlink・他 owner・広い permission を拒否。API key/PAR と contents をログに出さず、PAR origin/redirect と error redaction を mock で検証。PAR 実期限切れ、AIDP の複数 IAM user / permission 差、全 host log 経路は別途未確認。[詳細](docs/20261101_実APIと実装着手.md)、[tests](internal/mount/readonly_test.go)、[recovery](docs/20261101_復旧データ基盤.md)。
 
 ---
 
@@ -71,6 +71,8 @@ Oracle AI Data Platform (AIDP) Workbench の workspace をローカルから操�
 ## 完了
 
 - 2026-11-02: `scripts/aidp-write-probe.py` が `/Workspace/Shared` のランダム UUID root のみを作成し、既知の合成 child だけを cleanup することを実 AIDP で検証。正常完了後は root DELETE 204 と親一覧からの消滅を確認。途中の曖昧結果では自動削除を止め、journal と候補を残す。実 AIDP PAR/FUSE の process-kill recovery 試験を含む一連の suite 後も root cleanup 済み。[詳細](docs/20261101_書き込みAPI実測.md)、[復旧](docs/20261101_復旧データ基盤.md)。
+
+- 2026-11-02: Workbench `sandbox` UI で専用 synthetic notebook に marker を入力して未実行保存、一覧から rename、再オープンを実施。UI 表示と signed contents GET が 1 cell / marker で一致し、旧 path は 404、新 path は 200 (`size=null`, ETag 無し)。2 分周期の表示は確認したが周期保存を待つ試験、既存 notebook の outputs / metadata 保持、REST 更新との同時編集は未確認。合成 notebook は削除確認で保留中。[詳細](docs/20261101_書き込みAPI実測.md)。
 
 - 2026-11-02: experimental FUSE の FILE `create`/`write`/`truncate`/`fsync`/`mkdir` と既存 FILE 更新を fake と実 AIDP 専用 mount で検証。部分 write・空 FILE・duplicate create/mkdir の errno と内容、非空 directory delete の remote 危険性を確認し、`unlink`/`rmdir`/`rename` は `EOPNOTSUPP` として拒否する契約を README に明記。rename の flag/置換・同時操作の追加条件は別タスクに残す。[詳細](docs/20261101_復旧データ基盤.md)、[書き込み API 実測](docs/20261101_書き込みAPI実測.md)。
 

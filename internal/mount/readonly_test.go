@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sync"
 	"syscall"
@@ -140,6 +141,42 @@ func TestSnapshotAndReadonlyMount(t *testing.T) {
 		t.Errorf("deleted path stat: %v", err)
 	}
 }
+
+func TestReadonlyMountDeniesOtherUID(t *testing.T) {
+	if _, err := os.Stat("/dev/fuse"); err != nil {
+		t.Skip("FUSE device unavailable")
+	}
+	sudo, err := exec.LookPath("sudo")
+	if err != nil {
+		t.Skip("sudo unavailable for cross-user permission check")
+	}
+	check := exec.Command(sudo, "-n", "-u", "#65534", "--", "true")
+	if err = check.Run(); err != nil {
+		t.Skipf("noninteractive user switch unavailable: %v", err)
+	}
+	d := t.TempDir()
+	if err = os.Chmod(d, 0755); err != nil {
+		t.Fatal(err)
+	}
+	srv, err := Mount(context.Background(), d, &fake{data: []byte("private")})
+	if err != nil {
+		t.Skipf("FUSE mount unavailable: %v", err)
+	}
+	defer func() {
+		if err := srv.Unmount(); err != nil {
+			t.Errorf("unmount: %v", err)
+		}
+		srv.Wait()
+	}()
+
+	check = exec.Command(sudo, "-n", "-u", "#65534", "--", "test", "-r", filepath.Join(d, "file"))
+	if err = check.Run(); err == nil {
+		t.Fatal("another UID can read the owner-only FUSE file")
+	} else if exit, ok := err.(*exec.ExitError); !ok || exit.ExitCode() != 1 {
+		t.Fatalf("cross-user permission check failed unexpectedly: %v", err)
+	}
+}
+
 func TestSnapshotBounds(t *testing.T) {
 	s := &snapshot{data: []byte("abc")}
 	if _, e := s.Read(context.Background(), make([]byte, 1), -1); e != syscall.EINVAL {
