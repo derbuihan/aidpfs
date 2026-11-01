@@ -97,3 +97,5 @@ Oracle AI Data Platform (AIDP) Workbench の workspace をローカルから操�
 - 2026-11-01: 専用領域で WorkspaceObject のバイナリ作成と contents による読み取り、notebook PUT、cleanup を確認。file PUT は誤った `if-match` でも更新され、競合保護は未確認。[書き込み API 実測](docs/20261101_書き込みAPI実測.md)。
 
 - 2026-11-01: 実 AIDP・FUSE の専用領域で合成 binary の SHA-256、外部更新後の既存 handle と再 open、stat を確認し、unmount・cleanup 済み。1 件の小ファイルに限定。詳細は [書き込み API 実測](docs/20261101_書き込みAPI実測.md)。
+
+- 2026-11-01: 専用 binary の download PAR 取得と署名なし転送、rename の不正 if-match と既存先衝突、WorkspaceObject PUT の条件付き更新を実測。PAR の期限・upload、rename の原子性、競合保護は未解決。[実測詳細](docs/20261101_書き込みAPI実測.md)。

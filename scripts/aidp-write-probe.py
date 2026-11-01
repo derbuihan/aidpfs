@@ -15,7 +15,7 @@ import tempfile
 import time
 import sys
 import uuid
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 
 import oci
 import requests
@@ -108,6 +108,48 @@ def main():
             obj = r.json()
             got = base64.b64decode(obj['content']) if obj.get('format') == 'base64' else obj.get('content', '').encode()
             print('file contents format', obj.get('format'), 'bytes match', got == data, 'ETag present', bool(r.headers.get('etag')), flush=True)
+        # Generating a PAR is a POST with side effects, confined to our test file.
+        par_response = request('POST', base + '/actions/downloadFileMeta',
+            params={'shouldGenerateNewPar': 'true'}, headers={'path': file_path, 'type': 'FILE'})
+        if par_response.ok:
+            par_meta = par_response.json()
+            par_url = par_meta.get('parUrl')
+            print('download PAR present', bool(par_url), 'metadata ETag present', bool(par_meta.get('eTag')),
+                  'metadata size matches', par_meta.get('size') == len(data), flush=True)
+            if par_url:
+                parsed = urlsplit(par_url)
+                expected_host = 'objectstorage.' + a.region + '.oraclecloud.com'
+                if parsed.scheme != 'https' or parsed.hostname != expected_host or parsed.username or parsed.password or parsed.port:
+                    raise RuntimeError('PAR URL origin is not expected OCI Object Storage')
+                try:
+                    with requests.Session() as par_client:
+                        par_client.trust_env = False
+                        download = par_client.get(par_url, timeout=20, allow_redirects=False)
+                        print('PAR download status', download.status_code, 'auth absent', 'Authorization' not in download.request.headers,
+                              'binary match', download.status_code == 200 and download.content == data, flush=True)
+                except requests.RequestException as exc:
+                    print('PAR transfer failed', type(exc).__name__, flush=True)
+        # Compare WorkspaceObject PUT behavior with the data-plane eTag
+        # returned by downloadFileMeta; all payloads remain inside this run's file.
+        if par_response.ok and par_response.json().get('eTag'):
+            candidate = par_response.json()['eTag']
+            def read_file_bytes():
+                response = request('GET', contents(file_path), params={'content': 1})
+                response.raise_for_status()
+                model = response.json()
+                return base64.b64decode(model['content']) if model.get('format') == 'base64' else model['content'].encode()
+            bad_object = request('PUT', object_url, headers={'if-match': '"aidpfs-obviously-wrong-etag"', 'Content-Type': 'application/octet-stream'}, data=b'bad-if-match')
+            after_bad = read_file_bytes()
+            print('object PUT wrong if-match status', bad_object.status_code, 'original preserved', after_bad == data, flush=True)
+            good_object = request('PUT', object_url, headers={'if-match': candidate, 'Content-Type': 'application/octet-stream'}, data=b'valid-etag-write')
+            after_good = read_file_bytes()
+            print('object PUT PAR eTag status', good_object.status_code, 'new bytes visible', after_good == b'valid-etag-write', flush=True)
+            stale_object = request('PUT', object_url, headers={'if-match': candidate, 'Content-Type': 'application/octet-stream'}, data=b'stale-etag-write')
+            after_stale = read_file_bytes()
+            print('object PUT reused eTag status', stale_object.status_code, 'previous bytes preserved', after_stale == after_good, flush=True)
+            if after_stale != data:
+                reset = request('PUT', object_url, headers={'Content-Type': 'application/octet-stream'}, data=data)
+                if reset.status_code not in (200, 201) or read_file_bytes() != data: raise RuntimeError('failed to restore probe data')
         if a.mount_binary:
             mount_dir = tempfile.mkdtemp(prefix='aidpfs-write-probe-')
             mount_process = subprocess.Popen([a.mount_binary, '--profile', a.profile, '--region', a.region,
@@ -147,6 +189,19 @@ def main():
             bad = request('PUT', contents(notebook), headers={'if-match': '"aidpfs-obviously-wrong-etag"'}, json=replacement)
             verify = request('GET', contents(notebook), params={'content': 1})
             print('notebook wrong if-match rejected', bad.status_code in (409, 412), 'original preserved', verify.ok and verify.json().get('content') == payload['content'], flush=True)
+        # Rename only generated files; retain both candidate names in the
+        # journalled folder if a request result is ambiguous.
+        renamed = root + '/renamed.bin'
+        rename = request('PATCH', contents(file_path), headers={'if-match': '"aidpfs-obviously-wrong-etag"'}, json={'path': renamed.lstrip('/')})
+        if rename.status_code in (200, 201): owned.add(renamed)
+        current = {entry.get('path') for entry in listing(root)}
+        print('rename with wrong if-match status', rename.status_code, 'old present', file_path in current,
+              'new present', renamed in current, flush=True)
+        if notebook in owned and renamed in owned:
+            collision = request('PATCH', contents(notebook), json={'path': renamed.lstrip('/')})
+            current = {entry.get('path') for entry in listing(root)}
+            print('rename to existing destination status', collision.status_code,
+                  'source present', notebook in current, 'destination present', renamed in current, flush=True)
         print('probe finished', flush=True)
     finally:
         if open_handle:
