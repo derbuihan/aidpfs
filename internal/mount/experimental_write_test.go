@@ -6,9 +6,11 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sync"
 	"syscall"
 	"testing"
+	"time"
 
 	"aidpfs/internal/recovery"
 	"aidpfs/internal/writeback"
@@ -619,5 +621,53 @@ func TestExperimentalAppendFlagChange(t *testing.T) {
 	remote.mu.Unlock()
 	if got != "XbcdY" {
 		t.Fatalf("append position incorrect: %q", got)
+	}
+}
+
+func TestExperimentalDrainWaitsForActiveCreate(t *testing.T) {
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	finished := make(chan struct{})
+	n := &experimentalNode{buffers: &experimentalBuffers{create: func(context.Context, string) error { close(entered); <-release; return syscall.EIO }}}
+	go func() {
+		defer close(finished)
+		_, _, _, _ = n.Create(context.Background(), "file", syscall.O_WRONLY, 0600, &fuse.EntryOut{})
+	}()
+	<-entered
+	drained := make(chan struct{})
+	go func() { n.buffers.activity.sealAndWait(); close(drained) }()
+	deadline := time.After(2 * time.Second)
+	for {
+		n.buffers.activity.mu.Lock()
+		closed := n.buffers.activity.closed
+		n.buffers.activity.mu.Unlock()
+		if closed {
+			break
+		}
+		select {
+		case <-deadline:
+			t.Fatal("drain did not start")
+		default:
+			runtime.Gosched()
+		}
+	}
+	select {
+	case <-drained:
+		t.Fatal("drain returned during create")
+	default:
+	}
+	if _, _, _, err := n.Create(context.Background(), "other", syscall.O_WRONLY, 0600, &fuse.EntryOut{}); err != syscall.ESHUTDOWN {
+		t.Fatalf("late create: %v", err)
+	}
+	close(release)
+	select {
+	case <-finished:
+	case <-time.After(2 * time.Second):
+		t.Fatal("create did not finish")
+	}
+	select {
+	case <-drained:
+	case <-time.After(2 * time.Second):
+		t.Fatal("drain did not finish")
 	}
 }

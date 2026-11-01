@@ -105,6 +105,7 @@ func run() error {
 	defer signal.Stop(done)
 	waitForUnmount(server, done, os.Stderr)
 	if experimental != nil {
+		experimental.Drain()
 		return checkRecoveryAfterUnmount(experimental.Pending(), journal)
 	}
 	return nil

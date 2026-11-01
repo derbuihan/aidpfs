@@ -25,11 +25,37 @@ type experimentalEntry struct {
 	refs   int
 }
 type experimentalBuffers struct {
+	mu       sync.Mutex
+	activity operationGate
+	values   map[string]*experimentalEntry
+	open     func(context.Context, string) (*writeback.Buffer, error)
+	create   func(context.Context, string) error
+	mkdir    func(context.Context, string) error
+}
+
+// operationGate prevents new state-changing operations after shutdown begins
+// and waits for operations that already entered to finish.
+type operationGate struct {
 	mu     sync.Mutex
-	values map[string]*experimentalEntry
-	open   func(context.Context, string) (*writeback.Buffer, error)
-	create func(context.Context, string) error
-	mkdir  func(context.Context, string) error
+	closed bool
+	wg     sync.WaitGroup
+}
+
+func (g *operationGate) begin() bool {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.closed {
+		return false
+	}
+	g.wg.Add(1)
+	return true
+}
+func (g *operationGate) end() { g.wg.Done() }
+func (g *operationGate) sealAndWait() {
+	g.mu.Lock()
+	g.closed = true
+	g.mu.Unlock()
+	g.wg.Wait()
 }
 
 func (m *experimentalBuffers) get(ctx context.Context, rel string) (*writeback.Buffer, error) {
@@ -108,6 +134,10 @@ func editAttrs(out *fuse.Attr, m backend.Metadata, b *writeback.Buffer) {
 }
 
 func (n *experimentalNode) Create(ctx context.Context, name string, flags uint32, _ uint32, out *fuse.EntryOut) (*fs.Inode, fs.FileHandle, uint32, syscall.Errno) {
+	if !n.buffers.activity.begin() {
+		return nil, nil, 0, syscall.ESHUTDOWN
+	}
+	defer n.buffers.activity.end()
 	if n.buffers.create == nil {
 		return nil, nil, 0, syscall.EOPNOTSUPP
 	}
@@ -136,6 +166,10 @@ func (n *experimentalNode) Create(ctx context.Context, name string, flags uint32
 }
 
 func (n *experimentalNode) Mkdir(ctx context.Context, name string, _ uint32, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
+	if !n.buffers.activity.begin() {
+		return nil, syscall.ESHUTDOWN
+	}
+	defer n.buffers.activity.end()
 	if n.buffers.mkdir == nil {
 		return nil, syscall.EOPNOTSUPP
 	}
@@ -216,6 +250,10 @@ func (n *experimentalNode) Readdir(ctx context.Context) (fs.DirStream, syscall.E
 	return fs.NewListDirStream(out), 0
 }
 func (n *experimentalNode) Open(ctx context.Context, flags uint32) (fs.FileHandle, uint32, syscall.Errno) {
+	if !n.buffers.activity.begin() {
+		return nil, 0, syscall.ESHUTDOWN
+	}
+	defer n.buffers.activity.end()
 	m, e := n.reader.Stat(ctx, n.rel)
 	if e != nil {
 		return nil, 0, errno(e)
@@ -252,6 +290,10 @@ func (n *experimentalNode) Read(_ context.Context, fh fs.FileHandle, dest []byte
 	return fuse.ReadResultData(dest[:count]), 0
 }
 func (n *experimentalNode) Write(ctx context.Context, fh fs.FileHandle, data []byte, off int64) (uint32, syscall.Errno) {
+	if !n.buffers.activity.begin() {
+		return 0, syscall.ESHUTDOWN
+	}
+	defer n.buffers.activity.end()
 	h, ok := fh.(*editHandle)
 	if !ok || !h.writable {
 		return 0, syscall.EBADF
@@ -267,6 +309,10 @@ func (n *experimentalNode) Write(ctx context.Context, fh fs.FileHandle, data []b
 	return uint32(count), errno(e)
 }
 func (n *experimentalNode) Setattr(ctx context.Context, fh fs.FileHandle, in *fuse.SetAttrIn, out *fuse.AttrOut) syscall.Errno {
+	if !n.buffers.activity.begin() {
+		return syscall.ESHUTDOWN
+	}
+	defer n.buffers.activity.end()
 	size, ok := in.GetSize()
 	if !ok || in.Valid & ^uint32(fuse.FATTR_SIZE|fuse.FATTR_FH|fuse.FATTR_LOCKOWNER) != 0 {
 		return syscall.EOPNOTSUPP
@@ -301,6 +347,10 @@ func (n *experimentalNode) Setattr(ctx context.Context, fh fs.FileHandle, in *fu
 	return 0
 }
 func (n *experimentalNode) Flush(ctx context.Context, fh fs.FileHandle) syscall.Errno {
+	if !n.buffers.activity.begin() {
+		return syscall.ESHUTDOWN
+	}
+	defer n.buffers.activity.end()
 	h, ok := fh.(*editHandle)
 	if !ok {
 		return syscall.EBADF
@@ -311,6 +361,10 @@ func (n *experimentalNode) Flush(ctx context.Context, fh fs.FileHandle) syscall.
 	return errno(h.buffer.Sync(ctx))
 }
 func (n *experimentalNode) Fsync(ctx context.Context, fh fs.FileHandle, _ uint32) syscall.Errno {
+	if !n.buffers.activity.begin() {
+		return syscall.ESHUTDOWN
+	}
+	defer n.buffers.activity.end()
 	h, ok := fh.(*editHandle)
 	if !ok {
 		return syscall.EBADF
@@ -320,6 +374,10 @@ func (n *experimentalNode) Fsync(ctx context.Context, fh fs.FileHandle, _ uint32
 
 // Release cannot report errors to close, so it never starts remote I/O.
 func (n *experimentalNode) Release(_ context.Context, fh fs.FileHandle) syscall.Errno {
+	if !n.buffers.activity.begin() {
+		return 0
+	}
+	defer n.buffers.activity.end()
 	if h, ok := fh.(*editHandle); ok {
 		n.buffers.release(n.rel, h.buffer)
 	}
@@ -344,6 +402,10 @@ type ExperimentalMount struct {
 
 // Pending returns the number of unsaved or failed file buffers.
 func (m *ExperimentalMount) Pending() int { return m.buffers.pending() }
+
+// Drain must be called after the FUSE serve loops stop, before inspecting
+// pending state and the journal. New mutations are rejected after it starts.
+func (m *ExperimentalMount) Drain() { m.buffers.activity.sealAndWait() }
 
 func mountExperimentalWithState(ctx context.Context, mountpoint string, reader backend.Reader, open func(context.Context, string) (*writeback.Buffer, error), create, mkdir func(context.Context, string) error) (*ExperimentalMount, error) {
 	m, e := reader.Stat(ctx, "")
