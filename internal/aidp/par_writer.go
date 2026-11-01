@@ -124,3 +124,44 @@ func (r *Reader) OpenExperimentalBuffer(ctx context.Context, rel, region string,
 	}
 	return writeback.NewBuffer(writeback.Target{PlatformID: r.platformID, WorkspaceKey: r.workspaceKey, RemotePath: remote}, meta.ETag, data, journal, &parWriter{reader: r, transport: transport})
 }
+
+// Snapshot fetches a version-bound normal-file snapshot for recovery diagnosis.
+// It generates a download PAR; it does not replay a write.
+func (w *parWriter) Snapshot(ctx context.Context, t writeback.Target) (writeback.Snapshot, error) {
+	rel, err := w.relative(t)
+	if err != nil {
+		return writeback.Snapshot{}, err
+	}
+	kind, err := w.reader.listed(ctx, rel)
+	if err != nil {
+		return writeback.Snapshot{}, err
+	}
+	if kind != backend.File {
+		return writeback.Snapshot{}, syscall.EOPNOTSUPP
+	}
+	meta, err := w.reader.parMetadataRequest(ctx, w.transport, rel, "DOWNLOAD", "", 0)
+	if err != nil {
+		return writeback.Snapshot{}, err
+	}
+	if meta.ETag == "" || meta.Size == nil || *meta.Size < 0 {
+		return writeback.Snapshot{}, syscall.ESTALE
+	}
+	data, err := w.transport.downloadVersioned(ctx, meta.URL, meta.ETag)
+	if err != nil {
+		return writeback.Snapshot{}, err
+	}
+	if int64(len(data)) != *meta.Size {
+		return writeback.Snapshot{}, syscall.ESTALE
+	}
+	return writeback.Snapshot{ETag: meta.ETag, Data: data}, nil
+}
+
+// InspectRecovery obtains a fresh version-bound snapshot and never retries a
+// journalled write. PAR generation is a side-effecting metadata POST.
+func (r *Reader) InspectRecovery(ctx context.Context, region string, record recovery.Record, data []byte) (writeback.Observation, error) {
+	transport, err := newOCIParTransport(region)
+	if err != nil {
+		return "", err
+	}
+	return writeback.Inspect(ctx, record, data, &parWriter{reader: r, transport: transport})
+}

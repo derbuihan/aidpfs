@@ -45,6 +45,15 @@ The experimental save coordinator can retain local recovery entries, but it is n
   --id ENTRY_ID --output /absolute/new/recovered-file
 ```
 
+To compare an entry with a current remote version, run:
+
+```sh
+./aidpfs recovery inspect --dir /absolute/private/recovery-directory \
+  --id ENTRY_ID --region REGION --profile OCI_PROFILE
+```
+
+The command generates a download PAR, compares a version-bound remote snapshot, and reports `base_version`, `uploaded_version`, `content_match_unknown_version`, or `remote_changed`. This is a point-in-time observation: matching content alone does not establish which client wrote it, and an uploaded version does not prove metadata completion or prevent a later change. It does not replay a write. If the target is missing, inaccessible, or the version changes during inspection, inspection fails and the journal remains intact.
+
 Export creates a 0600 file, refuses to overwrite an existing path, and leaves the journal intact. `incomplete-or-invalid` entries cannot be exported by this command; retain their directory for manual investigation. The journal contains file data and target metadata, so protect it accordingly. Entries at `put_started` or `update_started` can represent an unknown remote outcome; inspect the remote state before taking further action. These commands do not automatically replay or delete a journal.
 
 ## Validation and development

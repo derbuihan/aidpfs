@@ -136,7 +136,7 @@ func (s *Store) Load(id string) (Record, []byte, error) {
 		return Record{}, nil, err
 	}
 	var r Record
-	if json.Unmarshal(meta, &r) != nil || r.Version != 1 || r.Size < 0 || r.Size > maxPayload || (r.PreviousID != "" && !validID.MatchString(r.PreviousID)) || (r.PreviousID == "" && r.Generation != 0) || (r.PreviousID != "" && r.Generation == 0) || !validStage(r.Stage) || !validIdentity(r.PlatformID) || !validIdentity(r.WorkspaceKey) || !validETag(r.BaseETag) || ((r.Stage == PutConfirmed || r.Stage == UpdateStarted || r.Stage == Verified) && !validETag(r.PutETag)) {
+	if json.Unmarshal(meta, &r) != nil || r.Version != 1 || r.Size < 0 || r.Size > maxPayload || !strings.HasPrefix(r.RemotePath, "/") || path.Clean(r.RemotePath) != r.RemotePath || r.RemotePath == "/" || strings.ContainsRune(r.RemotePath, '\x00') || (r.PreviousID != "" && !validID.MatchString(r.PreviousID)) || (r.PreviousID == "" && r.Generation != 0) || (r.PreviousID != "" && r.Generation == 0) || !validStage(r.Stage) || !validIdentity(r.PlatformID) || !validIdentity(r.WorkspaceKey) || !validETag(r.BaseETag) || ((r.Stage == PutConfirmed || r.Stage == UpdateStarted || r.Stage == Verified) && !validETag(r.PutETag)) {
 		return Record{}, nil, errors.New("invalid recovery metadata")
 	}
 	data, err := readFile(filepath.Join(dir, "content"), r.Size)

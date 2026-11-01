@@ -5,8 +5,10 @@ import (
 	"context"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -186,6 +188,7 @@ func TestLiveFUSEIsolatedFixture(t *testing.T) {
 		t.Fatal(e)
 	}
 	found := false
+	var conflictID string
 	for _, entry := range entries {
 		if entry.Invalid {
 			continue
@@ -193,11 +196,22 @@ func TestLiveFUSEIsolatedFixture(t *testing.T) {
 		record, content, err := journal.Load(entry.ID)
 		if err == nil && record.Stage == recovery.PutStarted && bytes.Equal(content, local) {
 			found = true
+			conflictID = entry.ID
 		}
 	}
 	if !found {
 		t.Fatal("conflicted local change missing from recovery")
 	}
+	// The CLI diagnosis generates a read PAR but must not replay the change.
+	command := exec.CommandContext(ctx, "go", "run", "../../cmd/aidpfs", "recovery", "inspect", "--dir", journalDir, "--id", conflictID, "--region", region, "--profile", profile, "--endpoint", os.Getenv("AIDPFS_PROBE_ENDPOINT"))
+	output, err := command.CombinedOutput()
+	if err != nil || !strings.Contains(string(output), "observation=remote_changed") {
+		t.Fatalf("recovery inspect failed: %v", err)
+	}
+	if strings.Contains(string(output), string(local)) {
+		t.Fatal("recovery inspect leaked content")
+	}
+
 	if e = other.Truncate(0); e != nil {
 		t.Fatal(e)
 	}
