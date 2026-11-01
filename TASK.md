@@ -16,27 +16,17 @@ Oracle AI Data Platform (AIDP) Workbench の workspace をローカルから操�
 - [x] **環境**: 2026-11-02 の現在の実行環境で Ubuntu 26.04.1、Linux 7.0.0-42-generic、Go 1.26.8、`/dev/fuse` の mode 0666・読み書き可能、`fusermount3` を確認。2026-11-01 の実 AIDP read-only mount / unmount 記録も照合。Docker daemon は不要なため確認対象外。隔離された別実行環境では `/dev/fuse` が見えなかった記録と分けて記載。[詳細](docs/20261101_端末環境と調査元.md)。
 - [x] **接続**: 2026-11-02、OCI API key profile `OCI_TOKYO` / `ap-osaka-1` / `https://aidp.ap-osaka-1.oci.oraclecloud.com` で対象 platform `aidp-sandbox` と workspace `sandbox` が ACTIVE であることを control-plane / workspace API から別々に確認。workspace key で署名付き objects と既存 FILE・NOTEBOOK contents GET が成功し、読み取り権限を実証。ID/key は記録せず。[詳細](docs/20261101_実APIと実装着手.md)。
 - [ ] **一覧**: `GET /objects` の root・指定 path・直接の子・空ディレクトリ・非ファイル object・権限による結果を確認し、`opc-next-page` を使って複数ページを最後まで取得する。
-- [ ] **内容**: 既存の通常ファイルと notebook を対象に `objects` の path と `contents`、PAR の対応を調べ、bytes、format、size、時刻、type、ETag、名前の一致を検証する。directory の contents 一覧は前提にしない。
 - [ ] **境界**: 日本語・空白・`%`・`#`・階層区切り、root、長い名前、存在しない path、権限不足、失効した認証、429/5xx を検証できる範囲で確認する。結果には日時・操作・status・request ID・未確認事項を残す。
 - [ ] **転送経路**: contents と `downloadFileMeta`/PAR の対象種別、実際の取得手順、期限、サイズ制限、アクセス権を調査する。POST の副作用や追加権限も確認し、読み取りと決めつけない。
 
 ### 2. 基盤・backend
 
-- [ ] **ライセンス・構成**: wsfs は GPL-3.0 であることを踏まえ、コードやテストをコピーするか、ライセンス・配布方針を決める。Go module、CLI、バージョン表示、整形・テスト導線を整備する。
-- [ ] **設定と認証**: OCI profile、region、endpoint、platform ID、workspace key、remote path、mount point の指定・検証と OCI リクエスト署名を実装する。認証方式と対応範囲は実測結果に基づき明記する。
-- [ ] **責務分離**: FUSE に OCI 固有型を持ち込まない backend interface、通常ファイル/notebook/ディレクトリの共通 metadata、fake を設計する。wsfs は interface を持つが FUSE 側に Databricks 固有型への依存もあるため、無条件に移植しない。
-- [ ] **読み取り**: 一覧の全ページ取得、属性取得、ファイル内容取得、notebook の表示名と bytes を実装する。パスのエスケープ・remote root からの逸脱防止、実サイズと `stat` の一致をテストする。
 - [ ] **エラー・再試行**: HTTP status と OCI error code を errno に対応付け、401/403/404/409/412/429/5xx・timeout・切断をテストする。安全に再試行できる操作だけを対象にし、write の結果不明時や非冪等 POST を自動再実行しない。操作ごとの retry token を確認する。
 - [ ] **秘密情報**: 署名ヘッダー、鍵、PAR URL と query、取得内容をログ・エラー・テスト成果物に出さない。PAR 取得先への認証ヘッダー転送、redirect、期限切れを検証する。
-- [ ] **単体テスト**: API mock/fake によりページング、特殊 path、形式、認証/権限、エラー、キャンセル・timeout、部分応答を検証する。`go test ./...` は OCI 資格情報とネットワークを必要としない。
 
 ### 3. 読み取り専用 FUSE
 
-- [ ] **基本操作**: mount/unmount、指定サブツリー、owner-only、`readdir`/`lookup`/`getattr`/`open`/`read` を実装する。書き込みを拒否し、ファイル・ディレクトリの型と空ファイルを正しく表示する。
-- [ ] **属性と挙動**: UID/GID・mode・mtime・size・`statfs` の扱い、未対応操作と errno を明文化する。ファイル名衝突と notebook の正確なサイズを確認する。
 - [ ] **キャッシュ**: メタデータ・negative・内容・kernel page cache の関係、TTL と外部変更時の再検証を設計する。識別子の欠落や変更、破損、削除、権限変更、同時取得をテストする。wsfs の TTL を AIDP の保証として扱わない。
-- [ ] **I/O モード**: direct I/O または write-through を候補に比較し、ページキャッシュと外部更新の整合性を検証する。writeback cache は外部変更に関する Linux の制約を考慮して選択する。
-- [ ] **実 mount**: 実 AIDP と FUSE 対応ホストで `ls`、`find`、`stat`、部分/反復 read、`cat`、バイナリ checksum、notebook と通常ファイル、外部変更後の再読込を確認する。mock 成功だけで完了にしない。
 
 ### 4. 書き込み API と仕様の実測
 
@@ -86,6 +76,13 @@ Oracle AI Data Platform (AIDP) Workbench の workspace をローカルから操�
 - 以前の隔離された Codex 実行環境では `/dev/fuse` が見えなかった。2026-11-01 の今回の実行環境ではデバイスを読み書き可能で、読み取り専用 mount と unmount を確認済み。
 
 ## 完了
+
+- 2026-11-02: wsfs の GPL-3.0 を確認した上で独立実装とし、プロジェクトの GPL-3.0 方針、Go module、CLI、version、format/test/build 導線を整備。第三者ライセンス通知と配布検証は公開準備タスクに残す。[README](README.md)、[LICENSE](LICENSE)、[Makefile](Makefile)。
+- 2026-11-02: OCI profile/region/endpoint/platform/workspace key、remote subtree、mount point の設定・検証と OCI API-key request signing を実装。実 AIDP signed API で接続し、認証対応範囲を API-key profile に限定して記載。[詳細](docs/20261101_実APIと実装着手.md)。
+- 2026-11-02: FUSE から OCI 依存を分離した backend interface、通常 FILE/NOTEBOOK/directory metadata と fake backend を実装。API mock のページング・path・format・error・cancel/timeout/部分応答を含む通常 suite は OCI credential/network 不要で実行可能。[詳細](docs/20261101_実APIと実装着手.md)、[再試行と安全性](docs/20261101_読み取り再試行と安全性.md)。
+- 2026-11-02: read-only API backend で全ページ列挙、path escaping/root containment、属性・内容・Notebook JSON を実装。mock で size と bytes、欠落/重複名を確認し、実 AIDP の FILE と NOTEBOOK で objects path、contents name/type/format/time、size、bytes、PAR との一致・不一致と ETag 欠落を記録。contents の size が null となる API 制約も反映。[実 API 比較](docs/20261101_実APIと実装着手.md)、[書き込み/PAR比較](docs/20261101_書き込みAPI実測.md)。
+- 2026-11-02: read-only FUSE の mount/unmount、指定 subtree、mount owner 限定、readdir/lookup/getattr/open/read と write 拒否を fake 実 mount・実 AIDP で確認。実 AIDP では一覧、find/stat、部分/反復 read、cat/checksum、FILE/NOTEBOOK、外部更新中の既存 handle と再 open を検証済み。小規模の検証で大規模負荷は対象外。[詳細](docs/20261101_実APIと実装着手.md)。
+- 2026-11-02: read-only FUSE の UID/GID、mode、mtime、size、unsupported `statfs` と errno を明文化・検証。directory/file mode 0500/0400、size は実 read bytes、notebook JSON size を API bytes と照合、同名 type 衝突を EIO、未対応操作を明示した。kernel page cache を使わない direct I/O と metadata/negative TTL 0 を選び、実 FILE 外部更新で open handle は旧 snapshot、再 open は新内容を確認。[詳細](docs/20261101_実APIと実装着手.md)、[追加調査](docs/20261101_実装タスク追加調査.md)。
 
 - 2026-11-02: remote root 以外の configured subtree も parent の complete listing で存在確認してから mount/`ReadDir` する。missing root は `ENOENT`、実在する empty FOLDER は空一覧として受け付ける。mock で両方を検証し、実 AIDP probe は `/Workspace` 下の既存 subtree で再成功。[詳細](docs/20261101_実APIと実装着手.md)。
 
