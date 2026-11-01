@@ -107,3 +107,5 @@ Oracle AI Data Platform (AIDP) Workbench の workspace をローカルから操�
 - 2026-11-01: 読み取り専用版の README と Linux CI 設定を追加。現環境で build・test・vet・version を確認。GitHub Actions の実行、配布物と全依存ライセンス通知は未検証。未解決の remote root `/` は CLI で拒否。
 
 - 2026-11-01: 専用 FILE で upload PAR REFRESH が旧内容を保持し、Object Storage 条件付き PUT が不正/有効/旧 ETag に 412/200/412 を返すことを 2 回確認。CREATE + overwrite は転送前に 0 bytes 化。UPDATE の競合・障害回復・notebook は未解決。[実測](docs/20261101_書き込みAPI実測.md)。
+
+- 2026-11-01: REFRESH / UPDATE と条件付き PAR 転送の Go 内部基盤を追加。TLS mock で認証ヘッダー非転送・redirect 拒否・結果不明時の非再試行を確認。実 AIDP・FUSE には未接続、復旧と他 client 競合は未実装。[詳細](docs/20261101_書き込みAPI実測.md)。
