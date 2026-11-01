@@ -36,11 +36,13 @@ def main():
     p.add_argument('--mount-binary', help='optional aidpfs executable for live mount checks')
     p.add_argument('--write-mount-binary', help='optional aidpfs executable for isolated experimental write checks')
     p.add_argument('--vim-check', action='store_true', help='test configured Vim on an isolated synthetic file (requires --write-mount-binary)')
+    p.add_argument('--git-check', action='store_true', help='test Git with a local separate repository and rg (requires --write-mount-binary)')
     p.add_argument('--region', default='ap-osaka-1')
     p.add_argument('--go-par-test', action='store_true', help='run Go live PAR integration against this run only')
     p.add_argument('--rename-race', action='store_true', help='run potentially ambiguous concurrent rename experiment')
     a = p.parse_args()
     if a.vim_check and not a.write_mount_binary: p.error('--vim-check requires --write-mount-binary')
+    if a.git_check and not a.write_mount_binary: p.error('--git-check requires --write-mount-binary')
     if not a.endpoint.startswith('https://') or '/' in a.endpoint[8:]:
         p.error('endpoint must be an HTTPS origin')
     token = uuid.uuid4().hex
@@ -338,6 +340,33 @@ def main():
                     raise RuntimeError('create intent diagnosis failed')
                 print('experimental CLI create intent diagnosis succeeded', flush=True)
                 print('experimental CLI create, write, fsync and duplicate rejection succeeded', flush=True)
+                if a.git_check:
+                    # Keep Git metadata on a local temporary filesystem. Only the
+                    # explicitly named synthetic file is read from the mount.
+                    with tempfile.TemporaryDirectory(prefix='aidpfs-git-probe-') as git_dir:
+                        git_env = os.environ.copy()
+                        git_env.update({'GIT_CONFIG_NOSYSTEM': '1', 'GIT_CONFIG_GLOBAL': '/dev/null', 'GIT_TERMINAL_PROMPT': '0'})
+                        def git(*args):
+                            return subprocess.run(['git', '--git-dir', git_dir, '--work-tree', write_mount_dir,
+                                '-c', 'core.hooksPath=/dev/null', '-c', 'commit.gpgsign=false',
+                                '-c', 'user.name=aidpfs probe', '-c', 'user.email=aidpfs-probe@example.invalid', *args],
+                                env=git_env, cwd=write_mount_dir, capture_output=True, timeout=60)
+                        initialized = subprocess.run(['git', 'init', '--bare', '--quiet', git_dir], env=git_env, capture_output=True, timeout=60)
+                        if initialized.returncode: raise RuntimeError('local Git init failed')
+                        before = git('status', '--porcelain', '--', 'cli-created.bin')
+                        if before.returncode or not before.stdout.startswith(b'?? '): raise RuntimeError('Git untracked status failed')
+                        search_start = time.monotonic()
+                        search = subprocess.run(['rg', '--no-config', '--quiet', '--fixed-strings', 'created-synthetic', 'cli-created.bin'],
+                            cwd=write_mount_dir, capture_output=True, timeout=60)
+                        search_ms = round((time.monotonic() - search_start) * 1000)
+                        if search.returncode: raise RuntimeError('rg synthetic search failed')
+                        if git('add', '--', 'cli-created.bin').returncode: raise RuntimeError('Git add failed')
+                        if git('commit', '--quiet', '-m', 'synthetic probe').returncode: raise RuntimeError('Git commit failed')
+                        committed = git('show', 'HEAD:cli-created.bin')
+                        if committed.returncode or committed.stdout != b'created-synthetic': raise RuntimeError('Git committed content mismatch')
+                        after = git('status', '--porcelain', '--', 'cli-created.bin')
+                        if after.returncode or after.stdout: raise RuntimeError('Git clean status failed')
+                    print('Git separate repository init, status, add, commit and rg succeeded; rg elapsed ms', search_ms, flush=True)
                 created_dir = root + '/cli-dir'
                 os.mkdir(os.path.join(write_mount_dir, 'cli-dir'))
                 owned.add(created_dir)
