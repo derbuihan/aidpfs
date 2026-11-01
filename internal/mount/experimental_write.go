@@ -89,11 +89,10 @@ type experimentalNode struct {
 	rel     string
 }
 type editHandle struct {
-	buffer      *writeback.Buffer
-	writable    bool
-	syncWrite   bool
-	appendWrite bool
-	metadata    backend.Metadata
+	buffer    *writeback.Buffer
+	writable  bool
+	syncWrite bool
+	metadata  backend.Metadata
 }
 
 func editAttrs(out *fuse.Attr, m backend.Metadata, b *writeback.Buffer) {
@@ -132,7 +131,7 @@ func (n *experimentalNode) Create(ctx context.Context, name string, flags uint32
 	editAttrs(&out.Attr, m, b)
 	child := &experimentalNode{reader: n.reader, buffers: n.buffers, rel: rel}
 	inode := n.NewInode(ctx, child, fs.StableAttr{Mode: syscall.S_IFREG})
-	h := &editHandle{buffer: b, writable: flags&syscall.O_ACCMODE != syscall.O_RDONLY, syncWrite: flags&syscall.O_DSYNC != 0, appendWrite: flags&syscall.O_APPEND != 0, metadata: m}
+	h := &editHandle{buffer: b, writable: flags&syscall.O_ACCMODE != syscall.O_RDONLY, syncWrite: flags&syscall.O_DSYNC != 0, metadata: m}
 	return inode, h, fuse.FOPEN_DIRECT_IO, 0
 }
 
@@ -239,7 +238,7 @@ func (n *experimentalNode) Open(ctx context.Context, flags uint32) (fs.FileHandl
 			return nil, 0, errno(e)
 		}
 	}
-	return &editHandle{buffer: b, writable: writable, syncWrite: flags&syscall.O_DSYNC != 0, appendWrite: flags&syscall.O_APPEND != 0, metadata: m}, fuse.FOPEN_DIRECT_IO, 0
+	return &editHandle{buffer: b, writable: writable, syncWrite: flags&syscall.O_DSYNC != 0, metadata: m}, fuse.FOPEN_DIRECT_IO, 0
 }
 func (n *experimentalNode) Read(_ context.Context, fh fs.FileHandle, dest []byte, off int64) (fuse.ReadResult, syscall.Errno) {
 	h, ok := fh.(*editHandle)
@@ -257,13 +256,9 @@ func (n *experimentalNode) Write(ctx context.Context, fh fs.FileHandle, data []b
 	if !ok || !h.writable {
 		return 0, syscall.EBADF
 	}
-	var count int
-	var e error
-	if h.appendWrite {
-		count, e = h.buffer.Append(data)
-	} else {
-		count, e = h.buffer.WriteAt(data, off)
-	}
+	// The kernel supplies the effective offset, including the current
+	// O_APPEND state, which may change after open via fcntl.
+	count, e := h.buffer.WriteAt(data, off)
 	if e == nil && count > 0 && h.syncWrite {
 		if e = h.buffer.Sync(ctx); e != nil {
 			return 0, errno(e)

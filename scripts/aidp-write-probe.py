@@ -7,6 +7,7 @@ run leaves a mode-0600 journal; cleanup never recursively removes unknown entrie
 import argparse
 import concurrent.futures
 import errno
+import fcntl
 import base64
 import json
 import hashlib
@@ -399,11 +400,25 @@ def main():
                     if os.write(append_fd, b'+') != 1: raise RuntimeError('nested append failed')
                 finally:
                     os.close(append_fd)
+                changing_fd = os.open(os.path.join(write_mount_dir, 'cli-dir', 'child.bin'), os.O_RDWR | os.O_APPEND)
+                try:
+                    initial_flags = fcntl.fcntl(changing_fd, fcntl.F_GETFL)
+                    fcntl.fcntl(changing_fd, fcntl.F_SETFL, initial_flags & ~os.O_APPEND)
+                    os.lseek(changing_fd, 0, os.SEEK_SET)
+                    if os.write(changing_fd, b'N') != 1: raise RuntimeError('write after clearing append failed')
+                    os.fsync(changing_fd)
+                    fcntl.fcntl(changing_fd, fcntl.F_SETFL, initial_flags | os.O_APPEND)
+                    os.lseek(changing_fd, 0, os.SEEK_SET)
+                    if os.write(changing_fd, b'!') != 1: raise RuntimeError('write after enabling append failed')
+                    os.fsync(changing_fd)
+                finally:
+                    os.close(changing_fd)
                 child_response = request('GET', contents(child_path), params={'content': 1})
                 if not child_response.ok: raise RuntimeError('nested file read failed')
                 model = child_response.json()
                 child_data = base64.b64decode(model['content']) if model.get('format') == 'base64' else model['content'].encode()
-                if child_data != b'nested-synthetic+': raise RuntimeError('nested file mismatch')
+                if child_data != b'Nested-synthetic+!': raise RuntimeError('nested file mismatch')
+                print('experimental CLI append flag changes preserved write positions', flush=True)
                 for operation, target in ((os.unlink, os.path.join(write_mount_dir, 'cli-dir', 'child.bin')),
                                           (os.rmdir, os.path.join(write_mount_dir, 'cli-dir'))):
                     try:

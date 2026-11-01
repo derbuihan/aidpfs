@@ -568,3 +568,56 @@ func TestExperimentalPathAndHandleInodeMatch(t *testing.T) {
 		t.Fatalf("path inode %d != handle inode %d", a, b)
 	}
 }
+
+func TestExperimentalAppendFlagChange(t *testing.T) {
+	remote := &mountRemote{tag: "old"}
+	d, _ := testExperimentalMount(t, remote)
+	f, err := os.OpenFile(filepath.Join(d, "file"), os.O_RDWR|os.O_APPEND, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	fd := f.Fd()
+	flags, _, errno := syscall.Syscall(syscall.SYS_FCNTL, fd, syscall.F_GETFL, 0)
+	if errno != 0 {
+		t.Fatal(errno)
+	}
+	_, _, errno = syscall.Syscall(syscall.SYS_FCNTL, fd, syscall.F_SETFL, flags&^syscall.O_APPEND)
+	if errno != 0 {
+		t.Fatal(errno)
+	}
+	if _, err = syscall.Seek(int(fd), 0, 0); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := syscall.Write(int(fd), []byte("X")); err != nil || n != 1 {
+		t.Fatalf("write: %d %v", n, err)
+	}
+	if err = f.Sync(); err != nil {
+		t.Fatal(err)
+	}
+	remote.mu.Lock()
+	got := string(remote.data)
+	remote.mu.Unlock()
+	if got != "Xbcd" {
+		t.Fatalf("write position incorrect: %q", got)
+	}
+	_, _, errno = syscall.Syscall(syscall.SYS_FCNTL, fd, syscall.F_SETFL, flags|syscall.O_APPEND)
+	if errno != 0 {
+		t.Fatal(errno)
+	}
+	if _, err = syscall.Seek(int(fd), 0, 0); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := syscall.Write(int(fd), []byte("Y")); err != nil || n != 1 {
+		t.Fatalf("append: %d %v", n, err)
+	}
+	if err = f.Sync(); err != nil {
+		t.Fatal(err)
+	}
+	remote.mu.Lock()
+	got = string(remote.data)
+	remote.mu.Unlock()
+	if got != "XbcdY" {
+		t.Fatalf("append position incorrect: %q", got)
+	}
+}

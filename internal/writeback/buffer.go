@@ -56,17 +56,6 @@ func (b *Buffer) ReadAt(dst []byte, off int64) (int, error) {
 func (b *Buffer) WriteAt(src []byte, off int64) (int, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	return b.writeAtLocked(src, off)
-}
-
-// Append selects the current end and persists the mutation under one lock.
-func (b *Buffer) Append(src []byte) (int, error) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.writeAtLocked(src, int64(len(b.data)))
-}
-
-func (b *Buffer) writeAtLocked(src []byte, off int64) (int, error) {
 	if b.blocked {
 		return 0, ErrRecoveryRequired
 	}
