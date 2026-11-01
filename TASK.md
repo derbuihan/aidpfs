@@ -149,6 +149,8 @@ Oracle AI Data Platform (AIDP) Workbench の workspace をローカルから操�
 
 - 2026-11-02: 実 AIDP の専用合成 FILE を試験用 FUSE で dirty にした後、別 client で削除。開いた handle の fstat、path の ENOENT、fsync・close の失敗、journal の内容保持と削除先の不再作成を確認し cleanup 済み。rename や他の競合順序は未検証。[詳細](docs/20261101_復旧データ基盤.md)。
 
+- 2026-11-02: 実環境の read-only FUSE 上で `fcntl(F_GETLK)` と `fcntl(F_SETLK)` の syscall 成功を確認。これは Linux kernel の mount 内ローカル POSIX advisory lock で、AIDP・Workbench・別 mount との分散 lock ではない。README の対応表を修正し、分散 lock は未対応と明記。互換操作全体の確認は未完了。[詳細](docs/20261101_復旧データ基盤.md)。
+
 - 2026-11-02: 試験用 FUSE で開いた handle の属性と truncate が remote 属性の再取得に依存しないよう修正。ローカル実 mount / fake で外部削除後の fstat・truncate、同期失敗と journal 内容の保持を確認。実 AIDP の外部削除・rename との競合は未検証。[詳細](docs/20261101_復旧データ基盤.md)。
 
 - 2026-11-02: 試験用 FUSE の読み取り専用 handle の close が、別の書き込み handle の dirty buffer を送信しないよう修正。ローカル実 mount と fake backend で journal 保持・後続 fsync を確認。実 AIDP やエディタでの同条件は未検証。[詳細](docs/20261101_復旧データ基盤.md)。

@@ -54,7 +54,8 @@ The experimental operation contract is deliberately limited:
 | `flush` | May be called more than once | Each writable flush attempts the same save path and returns its error. |
 | `release` / close | Releases local handle only | Does not start network I/O; close cannot report a save failure. Check `fsync` explicitly. |
 | `unlink`, `rmdir`, `rename` | `EOPNOTSUPP` | AIDP preconditions and deletion/move atomicity are not safe enough to expose. |
-| chmod, chown, timestamp changes, locks | Unsupported | Workspace metadata does not provide these POSIX guarantees. |
+| chmod, chown, timestamp changes | No-op or unsupported | AIDP does not expose these POSIX metadata operations. |
+| POSIX advisory locks | Kernel-local only | A local lock may succeed on one mount, but it is not sent to AIDP and does not coordinate with Workbench, other mounts, or clients. |
 | `statfs` | `EOPNOTSUPP` | AIDP capacity and quota are unavailable. |
 
 On a failed or uncertain `fsync`, the dirty buffer is frozen and its journal remains for manual inspection. `ESTALE` indicates a detected version conflict; other outcome-unknown failures also require reconciliation. A verified save means the expected bytes were observed at the saved version during verification, not that other clients are locked out.
