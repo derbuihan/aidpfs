@@ -129,3 +129,5 @@ Oracle AI Data Platform (AIDP) Workbench の workspace をローカルから操�
 - 2026-11-01: 試験用 FUSE の clean buffer を最後の release 後に破棄し、dirty/失敗 buffer は保持。fake と実 AIDP の専用 FILE で別 client 更新後の再 open を確認。release 前の再 open・他操作の整合性は未解決。[詳細](docs/20261101_復旧データ基盤.md)。
 
 - 2026-11-01: 復旧 journal を版付き PAR snapshot と照合する CLI を追加。mock の分類と、実 AIDP の競合 journal に対する `remote_changed` を確認。自動復旧・他の実分類・Workbench 競合は未検証。[詳細](docs/20261101_復旧データ基盤.md)。
+
+- 2026-11-01: 合成 notebook の cells・metadata・outputs と PAR を実測し構造変換を確認。contents PUT で空白名は成功、日本語・%・# は各 400（他経路は未確認）。専用領域 cleanup 済み。[詳細](docs/20261101_書き込みAPI実測.md)。

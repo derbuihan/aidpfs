@@ -372,6 +372,85 @@ def main():
             bad = request('PUT', contents(notebook), headers={'if-match': '"aidpfs-obviously-wrong-etag"'}, json=replacement)
             verify = request('GET', contents(notebook), params={'content': 1})
             print('notebook wrong if-match rejected', bad.status_code in (409, 412), 'original preserved', verify.ok and verify.json().get('content') == payload['content'], flush=True)
+        # Exercise representative notebook structure with synthetic cells and output.
+        if notebook in owned:
+            model = {'cells': [
+                {'cell_type': 'markdown', 'id': 'mdprobe1', 'metadata': {'tags': ['probe']}, 'source': ['# synthetic\n']},
+                {'cell_type': 'code', 'id': 'codeprobe1', 'metadata': {'custom': 'value'}, 'execution_count': 1,
+                 'source': ['print(1)\n'], 'outputs': [{'output_type': 'stream', 'name': 'stdout', 'text': ['1\n']}]}
+            ], 'metadata': {'kernelspec': {'name': 'python3', 'display_name': 'Python 3', 'language': 'python'}, 'probe': {'version': 1}},
+                'nbformat': 4, 'nbformat_minor': 5}
+            rich = request('PUT', contents(notebook), json={'type': 'notebook', 'format': 'json', 'content': model})
+            rich_get = request('GET', contents(notebook), params={'content': 1})
+            returned = rich_get.json().get('content') if rich_get.ok else None
+            print('rich notebook PUT/GET status', rich.status_code, rich_get.status_code,
+                  'cells equal', returned is not None and returned.get('cells') == model['cells'],
+                  'metadata equal', returned is not None and returned.get('metadata') == model['metadata'],
+                  'full model equal', returned == model, flush=True)
+            if returned is not None:
+                cells = returned.get('cells', [])
+                if len(cells) == len(model['cells']):
+                    for i, (actual, expected) in enumerate(zip(cells, model['cells'])):
+                        keys = sorted(set(actual) | set(expected))
+                        print('notebook cell', i, 'differing field names', [k for k in keys if actual.get(k) != expected.get(k)],
+                              'source text equivalent', ''.join(actual.get('source', [])) == ''.join(expected.get('source', [])),
+                              'output equal', actual.get('outputs') == expected.get('outputs'), flush=True)
+                        if i == 1:
+                            actual_outputs = actual.get('outputs', [])
+                            expected_outputs = expected.get('outputs', [])
+                            print('code cell metadata key names', sorted(actual.get('metadata', {}).keys()),
+                                  'outputs counts', len(actual_outputs), len(expected_outputs),
+                                  'first output type matches', bool(actual_outputs and expected_outputs and actual_outputs[0].get('output_type') == expected_outputs[0].get('output_type')),
+                                  'first output text equivalent', bool(actual_outputs and expected_outputs and ''.join(actual_outputs[0].get('text', [])) == ''.join(expected_outputs[0].get('text', []))), flush=True)
+                again = request('PUT', contents(notebook), json={'type': 'notebook', 'format': 'json', 'content': returned})
+                final = request('GET', contents(notebook), params={'content': 1})
+                print('notebook read-save-read status', again.status_code, final.status_code,
+                      'roundtrip equal', final.ok and final.json().get('content') == returned,
+                      'name matches', final.ok and final.json().get('name') == 'test.ipynb',
+                      'size present', final.ok and final.json().get('size') is not None, flush=True)
+            notebook_par = request('POST', base + '/actions/downloadFileMeta', params={'shouldGenerateNewPar': 'true'},
+                                   headers={'path': notebook, 'type': 'NOTEBOOK'})
+            print('notebook download PAR status', notebook_par.status_code,
+                  'PAR present', notebook_par.ok and bool(notebook_par.json().get('parUrl')), flush=True)
+            notebook_par_url = notebook_par.json().get('parUrl') if notebook_par.ok else None
+            if notebook_par_url:
+                parsed = urlsplit(notebook_par_url)
+                if parsed.scheme != 'https' or parsed.hostname != 'objectstorage.' + a.region + '.oraclecloud.com' or parsed.username or parsed.password or parsed.port:
+                    raise RuntimeError('unexpected notebook PAR origin')
+                try:
+                    with requests.Session() as par_client:
+                        par_client.trust_env = False
+                        notebook_raw = par_client.get(notebook_par_url, timeout=20, allow_redirects=False)
+                        try: parsed_notebook = notebook_raw.json()
+                        except ValueError: parsed_notebook = None
+                        print('notebook PAR GET status', notebook_raw.status_code,
+                              'auth absent', 'Authorization' not in notebook_raw.request.headers,
+                              'PAR JSON equals contents', parsed_notebook == returned,
+                              'PAR bytes match metadata size', len(notebook_raw.content) == notebook_par.json().get('size'), flush=True)
+                except requests.RequestException as exc:
+                    print('notebook PAR transfer failed', type(exc).__name__, flush=True)
+        # Special names are sent in encoded URL path segments rather than HTTP headers.
+        special = root + '/日本 語%#.txt'
+        special_create = request('PUT', contents(special), json={'type': 'file', 'format': 'text', 'content': 'synthetic'})
+        if special_create.status_code in (200, 201):
+            owned.add(special)
+            check = request('GET', contents(special), params={'content': 1})
+            matches = [x for x in listing(root) if x.get('path') == special]
+            print('special path GET', check.status_code, 'name matches', check.ok and check.json().get('name') == '日本 語%#.txt',
+                  'bytes match', check.ok and check.json().get('content') == 'synthetic', 'listed exactly once', len(matches) == 1, flush=True)
+        print('special path create status', special_create.status_code, flush=True)
+        for label, name in [('ascii', 'simple-probe.txt'), ('unicode', '日本語.txt'), ('space', 'space name.txt'), ('percent', 'percent%name.txt'), ('hash', 'hash#name.txt')]:
+            special_item = root + '/' + name
+            created_item = request('PUT', contents(special_item), json={'type': 'file', 'format': 'text', 'content': 'synthetic'})
+            if created_item.status_code in (200, 201):
+                owned.add(special_item)
+                read_item = request('GET', contents(special_item), params={'content': 1})
+                print('path case', label, 'create', created_item.status_code, 'GET', read_item.status_code,
+                      'name equal', read_item.ok and read_item.json().get('name') == name, flush=True)
+            else:
+                try: code = created_item.json().get('code')
+                except ValueError: code = None
+                print('path case', label, 'create', created_item.status_code, 'error code', code, flush=True)
         # Rename only generated files; retain both candidate names in the
         # journalled folder if a request result is ambiguous.
         renamed = root + '/renamed.bin'
