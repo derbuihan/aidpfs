@@ -323,3 +323,57 @@ func TestExperimentalOpenHandleSurvivesRemoteStatFailure(t *testing.T) {
 		t.Fatalf("journal content error: %v", err)
 	}
 }
+
+func TestExperimentalSynchronousWrites(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		flags int
+		fail  bool
+	}{{"sync", syscall.O_SYNC, false}, {"dsync", syscall.O_DSYNC, false}, {"sync_failure", syscall.O_SYNC, true}} {
+		t.Run(tc.name, func(t *testing.T) {
+			remote := &mountRemote{tag: "old", fail: tc.fail}
+			d, store := testExperimentalMount(t, remote)
+			f, err := os.OpenFile(filepath.Join(d, "file"), os.O_WRONLY|tc.flags, 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			n, err := f.WriteAt([]byte("new"), 0)
+			remote.mu.Lock()
+			puts := remote.puts
+			got := string(remote.data)
+			remote.mu.Unlock()
+			if puts != 1 {
+				t.Fatalf("write returned before remote PUT: %d", puts)
+			}
+			if tc.fail {
+				if !errors.Is(err, syscall.EIO) || n != 0 {
+					t.Fatalf("write failure n=%d err=%v", n, err)
+				}
+				if err = f.Close(); !errors.Is(err, syscall.EIO) {
+					t.Fatalf("close failure: %v", err)
+				}
+				entries, err := store.List()
+				if err != nil || len(entries) != 1 || entries[0].Stage != recovery.PutStarted {
+					t.Fatalf("journal %v %v", entries, err)
+				}
+				_, data, err := store.Load(entries[0].ID)
+				if err != nil || string(data) != "newd" {
+					t.Fatal("dirty content missing")
+				}
+			} else {
+				if err != nil || n != 3 || got != "newd" {
+					t.Fatalf("write n=%d err=%v", n, err)
+				}
+				if err = f.Close(); err != nil {
+					t.Fatal(err)
+				}
+				remote.mu.Lock()
+				puts = remote.puts
+				remote.mu.Unlock()
+				if puts != 1 {
+					t.Fatal("close repeated synchronous write")
+				}
+			}
+		})
+	}
+}

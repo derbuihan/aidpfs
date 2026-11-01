@@ -157,6 +157,28 @@ func TestLiveFUSEIsolatedFixture(t *testing.T) {
 	if e != nil || !bytes.Equal(got, data) {
 		t.Fatalf("restored verification: %v", e)
 	}
+	// O_SYNC must complete its remote save before WriteAt returns.
+	syncHandle, err := os.OpenFile(mountedFile, os.O_WRONLY|syscall.O_SYNC, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer syncHandle.Close()
+	if _, err = syncHandle.WriteAt([]byte{55}, 0); err != nil {
+		t.Fatal(err)
+	}
+	expected := append([]byte(nil), data...)
+	expected[0] = 55
+	got, err = r.ReadFile(ctx, "upload-par.bin")
+	if err != nil || !bytes.Equal(got, expected) {
+		t.Fatalf("synchronous write not visible remotely: %v", err)
+	}
+	if _, err = syncHandle.WriteAt(data[:1], 0); err != nil {
+		t.Fatal(err)
+	}
+	if err = syncHandle.Close(); err != nil {
+		t.Fatal(err)
+	}
+	t.Log("live O_SYNC write visible before close")
 	entries, e := journal.List()
 	if e != nil || len(entries) < 2 {
 		t.Fatalf("journal entries: %v", e)

@@ -75,9 +75,10 @@ type experimentalNode struct {
 	rel     string
 }
 type editHandle struct {
-	buffer   *writeback.Buffer
-	writable bool
-	metadata backend.Metadata
+	buffer    *writeback.Buffer
+	writable  bool
+	syncWrite bool
+	metadata  backend.Metadata
 }
 
 func editAttrs(out *fuse.Attr, m backend.Metadata, b *writeback.Buffer) {
@@ -155,7 +156,7 @@ func (n *experimentalNode) Open(ctx context.Context, flags uint32) (fs.FileHandl
 			return nil, 0, errno(e)
 		}
 	}
-	return &editHandle{buffer: b, writable: writable, metadata: m}, fuse.FOPEN_DIRECT_IO, 0
+	return &editHandle{buffer: b, writable: writable, syncWrite: flags&syscall.O_DSYNC != 0, metadata: m}, fuse.FOPEN_DIRECT_IO, 0
 }
 func (n *experimentalNode) Read(_ context.Context, fh fs.FileHandle, dest []byte, off int64) (fuse.ReadResult, syscall.Errno) {
 	h, ok := fh.(*editHandle)
@@ -168,12 +169,17 @@ func (n *experimentalNode) Read(_ context.Context, fh fs.FileHandle, dest []byte
 	}
 	return fuse.ReadResultData(dest[:count]), 0
 }
-func (n *experimentalNode) Write(_ context.Context, fh fs.FileHandle, data []byte, off int64) (uint32, syscall.Errno) {
+func (n *experimentalNode) Write(ctx context.Context, fh fs.FileHandle, data []byte, off int64) (uint32, syscall.Errno) {
 	h, ok := fh.(*editHandle)
 	if !ok || !h.writable {
 		return 0, syscall.EBADF
 	}
 	count, e := h.buffer.WriteAt(data, off)
+	if e == nil && count > 0 && h.syncWrite {
+		if e = h.buffer.Sync(ctx); e != nil {
+			return 0, errno(e)
+		}
+	}
 	return uint32(count), errno(e)
 }
 func (n *experimentalNode) Setattr(ctx context.Context, fh fs.FileHandle, in *fuse.SetAttrIn, out *fuse.AttrOut) syscall.Errno {
