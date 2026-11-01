@@ -17,33 +17,55 @@ import (
 	"github.com/hanwen/go-fuse/v2/fuse"
 )
 
-// experimentalBuffers is deliberately not exported or exposed by the CLI.
-// It retains buffers for the lifetime of the mount to avoid dropping dirty or
-// failed state. Production lifecycle, external invalidation, create/rename and
-// cross-process locking remain unresolved.
+// experimentalBuffers keeps dirty or failed buffers after last close. Clean
+// buffers are discarded after their last reference, allowing a later open to
+// fetch a fresh version. This remains a test-only, process-local policy.
+type experimentalEntry struct {
+	buffer *writeback.Buffer
+	refs   int
+}
 type experimentalBuffers struct {
 	mu     sync.Mutex
-	values map[string]*writeback.Buffer
+	values map[string]*experimentalEntry
 	open   func(context.Context, string) (*writeback.Buffer, error)
 }
 
 func (m *experimentalBuffers) get(ctx context.Context, rel string) (*writeback.Buffer, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if b := m.values[rel]; b != nil {
-		return b, nil
+	if entry := m.values[rel]; entry != nil {
+		entry.refs++
+		return entry.buffer, nil
 	}
-	b, e := m.open(ctx, rel)
-	if e != nil {
-		return nil, e
+	b, err := m.open(ctx, rel)
+	if err != nil {
+		return nil, err
 	}
-	m.values[rel] = b
+	if b == nil {
+		return nil, syscall.EIO
+	}
+	m.values[rel] = &experimentalEntry{buffer: b, refs: 1}
 	return b, nil
+}
+func (m *experimentalBuffers) release(rel string, b *writeback.Buffer) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	entry := m.values[rel]
+	if entry == nil || entry.buffer != b || entry.refs == 0 {
+		return
+	}
+	entry.refs--
+	if entry.refs == 0 && !entry.buffer.Dirty() {
+		delete(m.values, rel)
+	}
 }
 func (m *experimentalBuffers) find(rel string) *writeback.Buffer {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return m.values[rel]
+	if entry := m.values[rel]; entry != nil {
+		return entry.buffer
+	}
+	return nil
 }
 
 type experimentalNode struct {
@@ -113,9 +135,11 @@ func (n *experimentalNode) Open(ctx context.Context, flags uint32) (fs.FileHandl
 	writable := flags&syscall.O_ACCMODE != syscall.O_RDONLY
 	if flags&syscall.O_TRUNC != 0 {
 		if !writable {
+			n.buffers.release(n.rel, b)
 			return nil, 0, syscall.EACCES
 		}
 		if e = b.Truncate(0); e != nil {
+			n.buffers.release(n.rel, b)
 			return nil, 0, errno(e)
 		}
 	}
@@ -160,6 +184,7 @@ func (n *experimentalNode) Setattr(ctx context.Context, fh fs.FileHandle, in *fu
 		if e != nil {
 			return errno(e)
 		}
+		defer n.buffers.release(n.rel, b)
 	}
 	if e := b.Truncate(int64(size)); e != nil {
 		return errno(e)
@@ -180,6 +205,14 @@ func (n *experimentalNode) Fsync(ctx context.Context, fh fs.FileHandle, _ uint32
 	}
 	return errno(h.buffer.Sync(ctx))
 }
+
+// Release cannot report errors to close, so it never starts remote I/O.
+func (n *experimentalNode) Release(_ context.Context, fh fs.FileHandle) syscall.Errno {
+	if h, ok := fh.(*editHandle); ok {
+		n.buffers.release(n.rel, h.buffer)
+	}
+	return 0
+}
 func mountExperimental(ctx context.Context, mountpoint string, reader backend.Reader, open func(context.Context, string) (*writeback.Buffer, error)) (*fuse.Server, error) {
 	m, e := reader.Stat(ctx, "")
 	if e != nil {
@@ -190,6 +223,6 @@ func mountExperimental(ctx context.Context, mountpoint string, reader backend.Re
 	}
 	z := time.Duration(0)
 	opts := &fs.Options{MountOptions: fuse.MountOptions{Options: []string{"default_permissions"}, FsName: "aidpfs-test", Name: "aidpfs-test", DisableReadDirPlus: true}, EntryTimeout: &z, AttrTimeout: &z, NegativeTimeout: &z, UID: uint32(os.Getuid()), GID: uint32(os.Getgid())}
-	buffers := &experimentalBuffers{values: map[string]*writeback.Buffer{}, open: open}
+	buffers := &experimentalBuffers{values: map[string]*experimentalEntry{}, open: open}
 	return fs.Mount(mountpoint, &experimentalNode{reader: reader, buffers: buffers}, opts)
 }

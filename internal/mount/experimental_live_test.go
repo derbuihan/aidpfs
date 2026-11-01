@@ -57,7 +57,71 @@ func TestLiveFUSEIsolatedFixture(t *testing.T) {
 		}
 		server.Wait()
 	}()
-	f, e := os.OpenFile(filepath.Join(mountpoint, "upload-par.bin"), os.O_RDWR, 0)
+	// A clean last-close must eventually permit a fresh open after an external update.
+	mountedFile := filepath.Join(mountpoint, "upload-par.bin")
+	oldHandle, e := os.Open(mountedFile)
+	if e != nil {
+		t.Fatal(e)
+	}
+	if e = oldHandle.Close(); e != nil {
+		t.Fatal(e)
+	}
+	externalBuffer, e := r.OpenExperimentalBuffer(ctx, "upload-par.bin", region, journal)
+	if e != nil {
+		t.Fatal(e)
+	}
+	if e = externalBuffer.Truncate(0); e != nil {
+		t.Fatal(e)
+	}
+	if _, e = externalBuffer.WriteAt([]byte("external-update"), 0); e != nil {
+		t.Fatal(e)
+	}
+	if e = externalBuffer.Sync(ctx); e != nil {
+		t.Fatal(e)
+	}
+	deadline := time.Now().Add(10 * time.Second)
+	refreshed := false
+	for time.Now().Before(deadline) {
+		observed, err := os.ReadFile(mountedFile)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if bytes.Equal(observed, []byte("external-update")) {
+			refreshed = true
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	if !refreshed {
+		t.Fatal("reopen did not observe external change")
+	}
+	if e = externalBuffer.Truncate(0); e != nil {
+		t.Fatal(e)
+	}
+	if _, e = externalBuffer.WriteAt(data, 0); e != nil {
+		t.Fatal(e)
+	}
+	if e = externalBuffer.Sync(ctx); e != nil {
+		t.Fatal(e)
+	}
+	// Wait for the previous read handle's release before opening for writes.
+	deadline = time.Now().Add(10 * time.Second)
+	refreshed = false
+	for time.Now().Before(deadline) {
+		observed, err := os.ReadFile(mountedFile)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if bytes.Equal(observed, data) {
+			refreshed = true
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	if !refreshed {
+		t.Fatal("reopen did not observe restored bytes")
+	}
+	f, e := os.OpenFile(mountedFile, os.O_RDWR, 0)
 	if e != nil {
 		t.Fatal(e)
 	}

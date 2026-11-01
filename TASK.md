@@ -125,3 +125,5 @@ Oracle AI Data Platform (AIDP) Workbench の workspace をローカルから操�
 - 2026-11-01: fake backend と実 FUSE の試験用 mount で部分 write・truncate・共有 handle・fsync・close の失敗伝達と journal 保持を確認。実 AIDP の書き込み mount、create/rename・外部更新・障害復旧は未実装。[詳細](docs/20261101_復旧データ基盤.md)。
 
 - 2026-11-01: 試験用 FUSE と実 AIDP を専用 FILE で接続し write・fsync・別 REST 読取・復元、別 client 更新時の ESTALE と journal 保持を確認。CLI 対応、編集器、rename、障害回復は未完了。[詳細](docs/20261101_復旧データ基盤.md)。
+
+- 2026-11-01: 試験用 FUSE の clean buffer を最後の release 後に破棄し、dirty/失敗 buffer は保持。fake と実 AIDP の専用 FILE で別 client 更新後の再 open を確認。release 前の再 open・他操作の整合性は未解決。[詳細](docs/20261101_復旧データ基盤.md)。

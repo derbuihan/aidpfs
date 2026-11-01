@@ -188,3 +188,57 @@ func TestExperimentalMountTruncateOnOpenAndSharedHandles(t *testing.T) {
 		t.Fatal("truncate-on-open save mismatch")
 	}
 }
+
+func TestExperimentalBufferReferencesRetainDirtyAndEvictClean(t *testing.T) {
+	b, _ := newMountBuffer(t, &mountRemote{tag: "old"})
+	created := 0
+	m := &experimentalBuffers{values: map[string]*experimentalEntry{}, open: func(context.Context, string) (*writeback.Buffer, error) { created++; return b, nil }}
+	first, e := m.get(context.Background(), "file")
+	if e != nil {
+		t.Fatal(e)
+	}
+	second, e := m.get(context.Background(), "file")
+	if e != nil || first != second || created != 1 {
+		t.Fatal("handles not shared")
+	}
+	m.release("file", first)
+	if m.find("file") == nil {
+		t.Fatal("evicted while handle still open")
+	}
+	m.release("file", second)
+	if m.find("file") != nil {
+		t.Fatal("clean buffer not evicted")
+	}
+	current, e := m.get(context.Background(), "file")
+	if e != nil {
+		t.Fatal(e)
+	}
+	if _, e = current.WriteAt([]byte("x"), 0); e != nil {
+		t.Fatal(e)
+	}
+	m.release("file", current)
+	if m.find("file") != current {
+		t.Fatal("dirty buffer was discarded")
+	}
+	again, e := m.get(context.Background(), "file")
+	if e != nil || again != current {
+		t.Fatal("dirty buffer not reused")
+	}
+	m.release("file", again)
+}
+func newMountBuffer(t *testing.T, remote *mountRemote) (*writeback.Buffer, *recovery.Store) {
+	t.Helper()
+	d := t.TempDir()
+	if err := os.Chmod(d, 0700); err != nil {
+		t.Fatal(err)
+	}
+	s, err := recovery.Open(d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := writeback.NewBuffer(writeback.Target{PlatformID: "p", WorkspaceKey: "w", RemotePath: "/Workspace/file"}, "old", []byte("abcd"), s, remote)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b, s
+}
