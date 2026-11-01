@@ -545,3 +545,26 @@ func TestExperimentalPendingTracksDirtyAndFailedBuffers(t *testing.T) {
 		t.Fatalf("failed pending %d", got)
 	}
 }
+
+func TestExperimentalPathAndHandleInodeMatch(t *testing.T) {
+	d, _ := testExperimentalMount(t, &mountRemote{tag: "old"})
+	name := filepath.Join(d, "file")
+	before, err := os.Stat(name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f, err := os.OpenFile(name, os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	after, err := f.Stat()
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := before.Sys().(*syscall.Stat_t).Ino
+	b := after.Sys().(*syscall.Stat_t).Ino
+	if a != b {
+		t.Fatalf("path inode %d != handle inode %d", a, b)
+	}
+}

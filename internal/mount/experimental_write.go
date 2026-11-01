@@ -195,6 +195,12 @@ func (n *experimentalNode) Lookup(ctx context.Context, name string, out *fuse.En
 		return nil, errno(e)
 	}
 	editAttrs(&out.Attr, m, n.buffers.find(rel))
+	// Reuse the live path inode while it remains in the FUSE tree. AIDP does
+	// not expose a verified stable object identity, so this cannot detect all
+	// external delete/recreate races.
+	if existing := n.GetChild(name); existing != nil && existing.StableAttr().Mode == mode(m.Kind)&syscall.S_IFMT {
+		return existing, 0
+	}
 	child := &experimentalNode{reader: n.reader, buffers: n.buffers, rel: rel}
 	return n.NewInode(ctx, child, fs.StableAttr{Mode: mode(m.Kind) & syscall.S_IFMT}), 0
 }

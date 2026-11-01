@@ -87,6 +87,8 @@ Oracle AI Data Platform (AIDP) Workbench の workspace をローカルから操�
 
 ## 完了
 
+- 2026-11-02: 試験的 mount で生存中の同じ path inode を再利用し、ローカル実 FUSE の stat/fstat inode 不一致を修正。設定を限定した非対話 Vim で実 AIDP の合成 FILE を編集・保存し、REST と再 open で一致、cleanup 済み。通常設定・VS Code・Workbench・遠隔置換時の同一性は未検証。[詳細](docs/20261101_復旧データ基盤.md)。
+
 - 2026-11-02: signal 時の unmount 失敗を表示し、処理を継続して次の signal で再試行するよう修正。mock の失敗→再試行とローカル実 FUSE の signal unmount を確認。実 AIDP の unmount 失敗や in-flight 書き込み時は未検証。[詳細](docs/20261101_復旧データ基盤.md)。
 
 - 2026-11-02: 試験的 CLI の unmount 後、dirty buffer と未確認・不正な create intent を検出した場合にエラー終了する処理を追加。ローカルで状態判定、実 AIDP の正常な CLI mount / unmount・cleanup を確認。強制終了や終了中の in-flight request は未検証。[詳細](docs/20261101_復旧データ基盤.md)。

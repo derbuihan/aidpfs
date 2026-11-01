@@ -12,6 +12,7 @@ import json
 import hashlib
 import os
 import pathlib
+import re
 import signal
 import shutil
 import subprocess
@@ -34,10 +35,12 @@ def main():
     p.add_argument('--journal', required=True, help='new private recovery journal path')
     p.add_argument('--mount-binary', help='optional aidpfs executable for live mount checks')
     p.add_argument('--write-mount-binary', help='optional aidpfs executable for isolated experimental write checks')
+    p.add_argument('--vim-check', action='store_true', help='test configured Vim on an isolated synthetic file (requires --write-mount-binary)')
     p.add_argument('--region', default='ap-osaka-1')
     p.add_argument('--go-par-test', action='store_true', help='run Go live PAR integration against this run only')
     p.add_argument('--rename-race', action='store_true', help='run potentially ambiguous concurrent rename experiment')
     a = p.parse_args()
+    if a.vim_check and not a.write_mount_binary: p.error('--vim-check requires --write-mount-binary')
     if not a.endpoint.startswith('https://') or '/' in a.endpoint[8:]:
         p.error('endpoint must be an HTTPS origin')
     token = uuid.uuid4().hex
@@ -270,6 +273,11 @@ def main():
             print('upload PAR create did not succeed; unknown objects stop cleanup', flush=True)
         if a.write_mount_binary:
             if not put_etag: raise RuntimeError('experimental mount requires a completed synthetic upload')
+            if a.vim_check:
+                vim_path = root + '/vim-fixture.txt'
+                vim_create = request('POST', base + '/objects', headers={'path': vim_path, 'type': 'FILE', 'is-overwrite': 'false', 'Content-Type': 'application/octet-stream'}, data=b'vim-synthetic-original\n')
+                if vim_create.status_code not in (200, 201): raise RuntimeError('Vim fixture creation failed or ambiguous')
+                owned.add(vim_path)
             write_mount_dir = tempfile.mkdtemp(prefix='aidpfs-cli-mount-')
             recovery_dir = tempfile.mkdtemp(prefix='aidpfs-cli-recovery-')
             cli = subprocess.Popen([a.write_mount_binary, '--profile', a.profile, '--region', a.region,
@@ -282,6 +290,26 @@ def main():
                     if os.path.ismount(write_mount_dir) or cli.poll() is not None: break
                     time.sleep(0.1)
                 if not os.path.ismount(write_mount_dir): raise RuntimeError('experimental CLI mount failed')
+                if a.vim_check:
+                    vim_target = os.path.join(write_mount_dir, 'vim-fixture.txt')
+                    path_stat = os.stat(vim_target)
+                    with open(vim_target, 'rb') as inode_handle:
+                        if path_stat.st_ino != os.fstat(inode_handle.fileno()).st_ino:
+                            raise RuntimeError('Vim fixture path and handle inode mismatch')
+                    vim = subprocess.run(['vim', '-Nu', 'NONE', '-i', 'NONE', '-n', '-es', '-V1', '--cmd', 'set noswapfile nobackup nowritebackup backupcopy=yes',
+                        '-c', "call setline(1, 'vim-synthetic-edited')", '-c', 'wq', '--', vim_target], capture_output=True, timeout=60)
+                    if vim.returncode != 0:
+                        codes = sorted(set(re.findall(rb'\bE[0-9]+\b', vim.stderr)))
+                        print('configured Vim error codes', [code.decode('ascii') for code in codes], flush=True)
+                        raise RuntimeError('configured Vim save failed with exit status ' + str(vim.returncode))
+                    check = request('GET', contents(vim_path), params={'content': 1})
+                    if not check.ok: raise RuntimeError('Vim REST verification failed')
+                    model = check.json()
+                    value = base64.b64decode(model['content']) if model.get('format') == 'base64' else model['content'].encode()
+                    if value != b'vim-synthetic-edited\n': raise RuntimeError('Vim REST content mismatch')
+                    with open(vim_target, 'rb') as f:
+                        if f.read() != value: raise RuntimeError('Vim mount reread mismatch')
+                    print('configured Vim edit, save, REST read and mount reread succeeded', flush=True)
                 created_path = root + '/cli-created.bin'
                 with open(os.path.join(write_mount_dir, 'cli-created.bin'), 'xb', buffering=0) as new_file:
                     owned.add(created_path)

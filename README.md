@@ -43,6 +43,8 @@ This mode is incomplete: it cannot rename or delete files or save notebooks, and
 
 Append operations opened with `O_APPEND` are serialized within one mount's shared buffer. They do not provide atomic append across mounts or other AIDP clients. The append flag is captured on open; changing it later with `fcntl` is unsupported and can cause incorrect offsets.
 
+The experimental mount reuses a live FUSE inode for repeated lookups of the same path and type. This inode is not a verified AIDP object identity: an external delete and recreation may not be distinguishable. A configured noninteractive Vim save has been tested on a synthetic file; ordinary Vim settings, VS Code, and Workbench editing remain unverified.
+
 After the FUSE server stops, the experimental CLI reports an error if it observes dirty buffers or unconfirmed/invalid create intents. This check does not replace checking each write, `fsync` and close result, and abrupt termination or in-flight operations at shutdown have not been fully validated.
 
 Experimental `unlink`, `rmdir` and `rename` return `EOPNOTSUPP`. In the tested AIDP environment, both contents and WorkspaceObject DELETE removed a synthetic file despite an incorrect `if-match`; contents DELETE also removed a nonempty synthetic directory and its child. Rename accepted an incorrect `if-match`, and one concurrent rename experiment timed out. These observations do not establish safe conditional deletion or rename.
