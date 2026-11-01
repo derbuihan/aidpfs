@@ -82,14 +82,16 @@ Oracle AI Data Platform (AIDP) Workbench の workspace をローカルから操�
 
 ## 既知の制限事項
 
-- 基盤コードの一部と実 AIDP の読み取り API を確認済み。FUSE mount・エディタ E2E は未検証。公開 API 仕様は実動作を保証しない。
-- 以前の隔離された Codex 実行環境では `/dev/fuse` が見えなかった。2026-11-01 の今回の実行環境ではデバイスを読み書き可能だが、実 mount は未検証。
+- 実 AIDP の読み取り API と読み取り専用 FUSE mount は一部確認済み。エディタ E2E は未検証。公開 API 仕様は実動作を保証しない。
+- 以前の隔離された Codex 実行環境では `/dev/fuse` が見えなかった。2026-11-01 の今回の実行環境ではデバイスを読み書き可能で、読み取り専用 mount と unmount を確認済み。
 
 ## 完了
 
 - 2026-11-01: OCI_TOKYO / ap-osaka-1 で workspace 一覧、正しい workspace key による objects のページング、contents の既存 notebook・通常ファイルの読み取りを確認。全読み取りタスクの完了ではない。詳細は [実 API 調査](docs/20261101_実APIと実装着手.md)。
 - 2026-11-01: Go module、暫定 CLI と backend interface、設定・path の検証を追加。`go test ./...` はネットワーク・OCI 資格情報なしで成功。基盤タスクは未完了。
 
-- 2026-11-01: OCI Go SDK API key 署名の読み取り backend を追加。mock のページング・エラー・特殊 path・形式、実 AIDP の 4 ディレクトリと notebook / FILE 各 3 件の読み取り・stat サイズ一致を確認。リトライ、PAR、FUSE は未実装。詳細は [実 API 調査](docs/20261101_実APIと実装着手.md)。
+- 2026-11-01: OCI Go SDK API key 署名の読み取り backend を追加。mock のページング・エラー・特殊 path・形式、実 AIDP の 4 ディレクトリと notebook / FILE 各 3 件の読み取り・stat サイズ一致を確認。当時はリトライ、PAR、FUSE が未実装。詳細は [実 API 調査](docs/20261101_実APIと実装着手.md)。
 
 - 2026-11-01: Linux 実行環境で read-only FUSE の実 AIDP mount / unmount、4 ディレクトリ・6 ファイルの列挙と部分読み取り、存在しないパスの ENOENT、作成拒否 EROFS を確認。外部更新や binary checksum 等は未検証。詳細は [実 API 調査](docs/20261101_実APIと実装着手.md)。
+
+- 2026-11-01: 専用領域で WorkspaceObject のバイナリ作成と contents による読み取り、notebook PUT、cleanup を確認。file PUT は誤った `if-match` でも更新され、競合保護は未確認。[書き込み API 実測](docs/20261101_書き込みAPI実測.md)。
