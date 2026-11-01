@@ -13,7 +13,7 @@ Oracle AI Data Platform (AIDP) Workbench の workspace をローカルから操�
 
 ### 1. 実環境・読み取り API 調査
 
-- [ ] **環境**: 実際に mount するホストの OS、Go、`/dev/fuse`、mount/unmount 権限、必要なら Docker を確認する。Codex 実行環境との違いを記録する。
+- [x] **環境**: 2026-11-02 の現在の実行環境で Ubuntu 26.04.1、Linux 7.0.0-42-generic、Go 1.26.8、`/dev/fuse` の mode 0666・読み書き可能、`fusermount3` を確認。2026-11-01 の実 AIDP read-only mount / unmount 記録も照合。Docker daemon は不要なため確認対象外。隔離された別実行環境では `/dev/fuse` が見えなかった記録と分けて記載。[詳細](docs/20261101_端末環境と調査元.md)。
 - [ ] **接続**: 対象 profile・region・AIDP endpoint・platform ID・workspace key・接続経路と権限を読み取りで確認する。workspace が ACTIVE であることと内容 API が利用可能なことを分けて記録する。
 - [ ] **一覧**: `GET /objects` の root・指定 path・直接の子・空ディレクトリ・非ファイル object・権限による結果を確認し、`opc-next-page` を使って複数ページを最後まで取得する。
 - [ ] **内容**: 既存の通常ファイルと notebook を対象に `objects` の path と `contents`、PAR の対応を調べ、bytes、format、size、時刻、type、ETag、名前の一致を検証する。directory の contents 一覧は前提にしない。
