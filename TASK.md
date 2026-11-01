@@ -42,7 +42,7 @@ Oracle AI Data Platform (AIDP) Workbench の workspace をローカルから操�
 
 ### 6. 統合試験・公開
 
-- [ ] **実機 suite**: wsfs を参考に、既存 mount 上の FUSE・cache・stress・security suite と、必要な起動 wrapper を作る。破壊的試験は専用領域に限定し、cleanup の成功も確認する。
+- [x] **実機 suite**: 2026-11-02、`scripts/tests/run.sh` を追加し、format/vet/race/build をまとめた。ローカル FUSE、snapshot・writeback、並行 read/write、journal/recovery、permission、PAR redirect/secret redaction tests を実行し成功。`--live` は厳密な UUID 専用 subtree と `/dev/fuse` を要求して、既存 live PAR/FUSE suite を明示実行する。通常 suite 成功は Workbench/E2E 成功を意味しない。[runner](scripts/tests/run.sh)、[validation](README.md)。
 - [ ] **エディタ E2E**: VSCode 等で開く・編集・保存・再読込・rename を検証し、別 client と Workbench UI で結果を確認する。notebook の内容保持と競合時も対象とする。
 - [x] **Git / 検索**: 2026-11-02、実 AIDP の専用書き込み mount 上の合成 FILE を対象に、別置き Git リポジトリで init/status/add/commit と commit 内容、`rg` を検証。`rg` は単一 FILE で約 4.1 秒。mount 内 `.git`、checkout/merge、複数ファイル性能は未検証。別置き Git dir を推奨。[詳細](docs/20261101_復旧データ基盤.md)。
 - [ ] **セキュリティ**: mount owner 以外のアクセス、キャッシュの owner-only 権限、資格情報・PAR の漏えい、ログ・テスト出力を検証する。

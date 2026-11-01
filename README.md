@@ -96,7 +96,7 @@ Lineage validates the selected entry and its ancestors, including their contents
 
 ## Validation and development
 
-Once Go module dependencies are available locally, `make test` runs without OCI credentials or external network access; tests use local HTTP servers and a fake backend. A FUSE mount test is skipped if the device or mount permissions are unavailable. `go test -race ./...` and `go vet ./...` provide additional checks. Some integrations require an actual AIDP workspace and FUSE-capable host; successful local tests do not prove those integrations.
+Run `scripts/tests/run.sh` for the formatting check, `go vet`, race-enabled tests and a binary build. It uses local HTTP servers and fake backends and needs no OCI credentials or network. The mount suite exercises local FUSE, snapshot/writeback, concurrent operations, recovery, permissions and secret redaction. `scripts/tests/run.sh --live` runs the opt-in PAR/FUSE integration against an already prepared disposable `/Workspace/Shared/aidpfs-probe-<32 lowercase hex digits>` fixture; it requires explicit `AIDPFS_PROBE_*` settings, OCI credentials and `/dev/fuse` access. AIDP and Workbench behavior still require their own live checks.
 
 The repository includes an isolated API research script under `scripts/`; it creates and removes test data in a dedicated remote folder and requires OCI credentials. Review its behavior before running it. Keep recovery journals, tokens, PAR URLs and downloaded content private.
 
