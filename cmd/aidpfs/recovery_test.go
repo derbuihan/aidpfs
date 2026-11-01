@@ -29,6 +29,13 @@ func TestRecoveryCommands(t *testing.T) {
 	if !strings.Contains(out.String(), id) || strings.Contains(out.String(), "hidden content") {
 		t.Fatal("list output incorrect")
 	}
+	out.Reset()
+	if err = runRecovery([]string{"lineage", "--dir", d, "--id", id}, &out); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), id) || strings.Contains(out.String(), "hidden content") {
+		t.Fatal("lineage output incorrect")
+	}
 	dest := filepath.Join(t.TempDir(), "recovered")
 	out.Reset()
 	if err = runRecovery([]string{"export", "--dir", d, "--id", id, "--output", dest}, &out); err != nil {

@@ -62,3 +62,58 @@ func TestListAndExportPreserveJournal(t *testing.T) {
 		t.Fatal("incomplete entry exported")
 	}
 }
+
+func TestLineageValidatesEveryAncestor(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.Chmod(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	s, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := s.Create("platform", "workspace", "/Workspace/f", "version", []byte("one"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := s.CreateAfter("platform", "workspace", "/Workspace/f", "version", first, []byte("two"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	third, err := s.CreateAfter("platform", "workspace", "/Workspace/f", "version", second, []byte("three"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	chain, err := s.Lineage(third)
+	if err != nil || len(chain) != 3 || chain[0].ID != first || chain[1].ID != second || chain[2].ID != third {
+		t.Fatalf("unexpected lineage: %+v, %v", chain, err)
+	}
+	record, _, err := s.Load(second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record.WorkspaceKey = "different"
+	if err = writeRecord(filepath.Join(dir, second), record); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.Lineage(third); err == nil {
+		t.Fatal("accepted different target")
+	}
+	record.WorkspaceKey = "workspace"
+	record.PreviousID = third
+	if err = writeRecord(filepath.Join(dir, second), record); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.Lineage(third); err == nil {
+		t.Fatal("accepted inconsistent cycle")
+	}
+	if err = os.Remove(filepath.Join(dir, second, "content")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.Lineage(third); err == nil {
+		t.Fatal("accepted missing ancestor content")
+	}
+	if _, err = s.Lineage(""); err == nil {
+		t.Fatal("accepted empty id")
+	}
+}

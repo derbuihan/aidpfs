@@ -87,6 +87,8 @@ Oracle AI Data Platform (AIDP) Workbench の workspace をローカルから操�
 
 ## 完了
 
+- 2026-11-01: 復旧 journal の指定世代から先祖の内容・対象・世代連鎖を検証する `recovery lineage` を追加し、欠損・不整合の拒否をローカルで確認。別分岐の検出や最新版の決定、自動復旧は未実装。[詳細](docs/20261101_復旧データ基盤.md)。
+
 - 2026-11-01: PUT・metadata UPDATE の処理直後に応答を止めたローカル模擬サーバーで client を強制終了し、journal と遠隔状態の照合を確認。実 AIDP でも PUT 成功応答後、journal 更新前に子プロセスを終了し、内容保持と結果不明の分類、合成データ復元・cleanup を確認。通信途中の実環境停止や自動復旧は未検証。[詳細](docs/20261101_復旧データ基盤.md)。
 
 - 2026-11-01: OCI_TOKYO / ap-osaka-1 で workspace 一覧、正しい workspace key による objects のページング、contents の既存 notebook・通常ファイルの読み取りを確認。全読み取りタスクの完了ではない。詳細は [実 API 調査](docs/20261101_実APIと実装着手.md)。

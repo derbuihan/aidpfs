@@ -18,6 +18,38 @@ type Entry struct {
 	Invalid    bool
 }
 
+// Lineage validates the ancestry of an entry and returns it oldest first.
+// It does not determine whether the entry is the newest snapshot: other
+// processes or incomplete entries may have produced branches.
+func (s *Store) Lineage(id string) ([]Entry, error) {
+	if !validID.MatchString(id) {
+		return nil, errors.New("invalid recovery id")
+	}
+	seen := make(map[string]bool)
+	var chain []Entry
+	var child *Record
+	for id != "" {
+		if seen[id] || len(chain) >= 10000 {
+			return nil, errors.New("recovery lineage cycle or length limit")
+		}
+		seen[id] = true
+		r, _, err := s.Load(id)
+		if err != nil {
+			return nil, fmt.Errorf("cannot load lineage entry %s: %w", id, err)
+		}
+		if child != nil && (child.PlatformID != r.PlatformID || child.WorkspaceKey != r.WorkspaceKey || child.RemotePath != r.RemotePath || child.BaseETag != r.BaseETag || child.Generation != r.Generation+1 || r.Generation == ^uint64(0)) {
+			return nil, errors.New("inconsistent recovery lineage")
+		}
+		chain = append(chain, Entry{ID: id, Stage: r.Stage, Size: r.Size, PreviousID: r.PreviousID, Generation: r.Generation})
+		child = &r
+		id = r.PreviousID
+	}
+	for i, j := 0, len(chain)-1; i < j; i, j = i+1, j-1 {
+		chain[i], chain[j] = chain[j], chain[i]
+	}
+	return chain, nil
+}
+
 // List includes incomplete and corrupt entries so they cannot silently vanish.
 // It never returns journal contents or credentials.
 func (s *Store) List() ([]Entry, error) {

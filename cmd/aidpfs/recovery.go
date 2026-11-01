@@ -17,7 +17,7 @@ import (
 
 func runRecovery(args []string, out io.Writer) error {
 	if len(args) == 0 {
-		return errors.New("usage: aidpfs recovery list|export|inspect [flags]")
+		return errors.New("usage: aidpfs recovery list|lineage|export|inspect [flags]")
 	}
 	command := args[0]
 	fs := flag.NewFlagSet("recovery "+command, flag.ContinueOnError)
@@ -54,6 +54,19 @@ func runRecovery(args []string, out io.Writer) error {
 				fmt.Fprintf(out, "%s %s %d bytes generation=%d previous=%s\n", e.ID, e.Stage, e.Size, e.Generation, e.PreviousID)
 			}
 		}
+		return nil
+	case "lineage":
+		if *id == "" || *output != "" || *region != "" || *endpoint != "" || *profile != "DEFAULT" {
+			return errors.New("lineage requires --id and --dir")
+		}
+		entries, err := store.Lineage(*id)
+		if err != nil {
+			return err
+		}
+		for _, e := range entries {
+			fmt.Fprintf(out, "%s %s %d bytes generation=%d previous=%s\n", e.ID, e.Stage, e.Size, e.Generation, e.PreviousID)
+		}
+		fmt.Fprintln(out, "Ancestry verified; newer or incomplete branches may exist.")
 		return nil
 	case "export":
 		if *id == "" || *output == "" || *region != "" || *endpoint != "" || *profile != "DEFAULT" {
