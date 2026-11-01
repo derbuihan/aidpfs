@@ -52,7 +52,6 @@ Oracle AI Data Platform (AIDP) Workbench の workspace をローカルから操�
 - [ ] **エディタ E2E**: VSCode 等で開く・編集・保存・再読込・rename を検証し、別 client と Workbench UI で結果を確認する。notebook の内容保持と競合時も対象とする。
 - [x] **Git / 検索**: 2026-11-02、実 AIDP の専用書き込み mount 上の合成 FILE を対象に、別置き Git リポジトリで init/status/add/commit と commit 内容、`rg` を検証。`rg` は単一 FILE で約 4.1 秒。mount 内 `.git`、checkout/merge、複数ファイル性能は未検証。別置き Git dir を推奨。[詳細](docs/20261101_復旧データ基盤.md)。
 - [ ] **セキュリティ**: mount owner 以外のアクセス、キャッシュの owner-only 権限、資格情報・PAR の漏えい、ログ・テスト出力を検証する。
-- [ ] **公開準備**: README にセットアップ、認証、利用方法、保証・制約、検証方法、障害復旧を記載し、コード・依存のライセンスと第三者通知を整える。Linux 配布・CI を検証する。`docs/` は公開対象外。
 
 ---
 
@@ -76,6 +75,8 @@ Oracle AI Data Platform (AIDP) Workbench の workspace をローカルから操�
 - 以前の隔離された Codex 実行環境では `/dev/fuse` が見えなかった。2026-11-01 の今回の実行環境ではデバイスを読み書き可能で、読み取り専用 mount と unmount を確認済み。
 
 ## 完了
+
+- 2026-11-02: README に setup/authentication、use、limitations、validation、recovery を整理し、GPL-3.0 と imported Go modules のライセンスを [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) に記載。Linux amd64 binary build、gofmt、vet、race suite は現 HEAD で成功。Ubuntu GitHub Actions run 41301673469 も成功（run commit `ae1554f`、現 HEAD より前）。`docs/` は gitignore で公開対象外。[CI](.github/workflows/ci.yml)。
 
 - 2026-11-02: wsfs の GPL-3.0 を確認した上で独立実装とし、プロジェクトの GPL-3.0 方針、Go module、CLI、version、format/test/build 導線を整備。第三者ライセンス通知と配布検証は公開準備タスクに残す。[README](README.md)、[LICENSE](LICENSE)、[Makefile](Makefile)。
 - 2026-11-02: OCI profile/region/endpoint/platform/workspace key、remote subtree、mount point の設定・検証と OCI API-key request signing を実装。実 AIDP signed API で接続し、認証対応範囲を API-key profile に限定して記載。[詳細](docs/20261101_実APIと実装着手.md)。

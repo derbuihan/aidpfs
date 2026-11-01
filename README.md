@@ -86,4 +86,4 @@ The repository includes an isolated API research script under `scripts/`; it cre
 
 ## License
 
-The project is licensed under [GPL-3.0](LICENSE). Its implementation was written independently; it does not copy wsfs source code. Dependencies are listed in `go.mod` and retain their own licenses, including go-fuse and the Oracle OCI Go SDK.
+The project is licensed under [GPL-3.0](LICENSE). Its implementation was written independently; it does not copy wsfs source code. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for licenses of imported dependencies.
