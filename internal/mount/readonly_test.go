@@ -112,8 +112,10 @@ func TestSnapshotAndReadonlyMount(t *testing.T) {
 	if !ok || stat.Uid != uint32(os.Getuid()) || stat.Gid != uint32(os.Getgid()) {
 		t.Fatalf("file owner = %#v", st.Sys())
 	}
-	if _, err = os.OpenFile(file, os.O_WRONLY, 0); !errors.Is(err, syscall.EROFS) {
-		t.Errorf("existing write: %v", err)
+	for _, flags := range []int{os.O_WRONLY, os.O_RDONLY | os.O_TRUNC, os.O_RDONLY | os.O_APPEND} {
+		if _, err = os.OpenFile(file, flags, 0); !errors.Is(err, syscall.EROFS) {
+			t.Errorf("write/truncate/append flags %#x: %v", flags, err)
+		}
 	}
 	if _, err = os.Create(filepath.Join(d, "new")); !errors.Is(err, syscall.EROFS) {
 		t.Errorf("create: %v", err)
