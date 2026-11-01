@@ -87,6 +87,8 @@ Oracle AI Data Platform (AIDP) Workbench の workspace をローカルから操�
 
 ## 完了
 
+- 2026-11-02: 子プロセスの `RLIMIT_FSIZE` で journal 実書き込みを EFBIG にし、buffer と実 FUSE の write 拒否、remote 未送信、不完全 entry と先行編集の保持を確認。実 ENOSPC・電源断・実 AIDP 中断は未検証。全体試験で 1 回 FUSE 停滞し、再実行は成功。[詳細](docs/20261101_復旧データ基盤.md)。
+
 - 2026-11-02: unmount 後に不完全・破損 journal と未解決 snapshot 分岐を検出し、検証済み snapshot の正当な先祖のみ完了済みと扱うよう修正。ローカルで分岐・先祖破損を試験し、実 AIDP の正常保存後の CLI 終了と cleanup を確認。実ディスク満杯・強制終了は未検証。[詳細](docs/20261101_復旧データ基盤.md)。
 
 - 2026-11-02: 実 AIDP の専用 mount 上の合成 FILE を対象に、ローカル別置き Git リポジトリの init/status/add/commit と commit 内容、`rg` を確認。単一 FILE の `rg` は 1 回約 4.2 秒。mount 内 .git、checkout/merge、複数ファイル性能は未検証。[詳細](docs/20261101_復旧データ基盤.md)。
