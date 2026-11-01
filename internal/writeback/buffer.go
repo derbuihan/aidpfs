@@ -16,7 +16,7 @@ var ErrRecoveryRequired = errors.New("write outcome requires recovery before fur
 
 // Buffer is one shared, serialized view of an existing file. All handles for
 // the same file must share it; it does not implement cross-process locking.
-// It is not yet wired into FUSE. Every accepted mutation first persists a full
+// Every accepted mutation first persists a full
 // recovery snapshot, so a failed local journal write never changes the buffer.
 type Buffer struct {
 	mu          sync.Mutex
@@ -56,6 +56,17 @@ func (b *Buffer) ReadAt(dst []byte, off int64) (int, error) {
 func (b *Buffer) WriteAt(src []byte, off int64) (int, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	return b.writeAtLocked(src, off)
+}
+
+// Append selects the current end and persists the mutation under one lock.
+func (b *Buffer) Append(src []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.writeAtLocked(src, int64(len(b.data)))
+}
+
+func (b *Buffer) writeAtLocked(src []byte, off int64) (int, error) {
 	if b.blocked {
 		return 0, ErrRecoveryRequired
 	}

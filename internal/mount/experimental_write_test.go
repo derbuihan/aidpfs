@@ -410,3 +410,71 @@ func TestExperimentalMkdirFailureDoesNotRetry(t *testing.T) {
 		t.Fatalf("errno %v calls %d", err, calls)
 	}
 }
+
+func TestExperimentalAppendSharedHandles(t *testing.T) {
+	remote := &mountRemote{tag: "old"}
+	d, _ := testExperimentalMount(t, remote)
+	name := filepath.Join(d, "file")
+	first, err := os.OpenFile(name, os.O_WRONLY|os.O_APPEND, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := os.OpenFile(name, os.O_WRONLY|os.O_APPEND, 0)
+	if err != nil {
+		first.Close()
+		t.Fatal(err)
+	}
+	var wg sync.WaitGroup
+	for i, h := range []*os.File{first, second} {
+		wg.Add(1)
+		go func(h *os.File, b byte) {
+			defer wg.Done()
+			for j := 0; j < 4; j++ {
+				if n, e := h.Write([]byte{b}); e != nil || n != 1 {
+					t.Errorf("append n=%d err=%v", n, e)
+					return
+				}
+			}
+		}(h, byte('x'+i))
+	}
+	wg.Wait()
+	if err = first.Sync(); err != nil {
+		t.Fatal(err)
+	}
+	remote.mu.Lock()
+	result := append([]byte(nil), remote.data...)
+	remote.mu.Unlock()
+	if len(result) != 12 || string(result[:4]) != "abcd" || bytes.Count(result[4:], []byte("x")) != 4 || bytes.Count(result[4:], []byte("y")) != 4 {
+		t.Fatalf("appends not preserved: %q", result)
+	}
+	if err = first.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err = second.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestExperimentalSynchronousAppendFailureRetainsData(t *testing.T) {
+	remote := &mountRemote{tag: "old", fail: true}
+	d, store := testExperimentalMount(t, remote)
+	f, err := os.OpenFile(filepath.Join(d, "file"), os.O_WRONLY|os.O_APPEND|os.O_SYNC, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	n, err := f.Write([]byte("x"))
+	if n != 0 || !errors.Is(err, syscall.EIO) {
+		t.Fatalf("append: %d %v", n, err)
+	}
+	if err = f.Close(); !errors.Is(err, syscall.EIO) {
+		t.Fatalf("close: %v", err)
+	}
+	entries, err := store.List()
+	if err != nil || len(entries) != 1 || entries[0].Stage != recovery.PutStarted {
+		t.Fatalf("entries: %v %v", entries, err)
+	}
+	_, data, err := store.Load(entries[0].ID)
+	if err != nil || string(data) != "abcdx" {
+		t.Fatalf("append recovery error: %v", err)
+	}
+}

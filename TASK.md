@@ -87,6 +87,8 @@ Oracle AI Data Platform (AIDP) Workbench の workspace をローカルから操�
 
 ## 完了
 
+- 2026-11-02: 試験的 FUSE で `O_APPEND` を追加。ローカル実 mount で共有 handle の並行追記と同期失敗時 journal 保持、実 AIDP の専用 FILE で `O_APPEND|O_SYNC` と REST 読取・cleanup を確認。別 mount・外部 client の追記競合や open 後の flag 変更は未対応。[詳細](docs/20261101_復旧データ基盤.md)。
+
 - 2026-11-02: 実 AIDP の専用領域で CLI mkdir の下に FILE を create・write・fsync し、REST 内容と親一覧を確認。子を個別削除後、create intent の `not_listed` と親・専用領域 cleanup を確認。ネスト 1 階層・単一 client の限定試験。[詳細](docs/20261101_復旧データ基盤.md)。
 
 - 2026-11-02: 試験的 FUSE に非上書き mkdir と FOLDER intent を追加。実 AIDP の専用領域で CLI mkdir、重複拒否、親一覧、`inspect-create` の `directory_listed`、cleanup を確認。ネスト操作・作成中断・rmdir・並行操作は未検証。[詳細](docs/20261101_復旧データ基盤.md)。

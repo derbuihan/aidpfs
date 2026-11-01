@@ -278,11 +278,16 @@ def main():
                 with open(os.path.join(write_mount_dir, 'cli-dir', 'child.bin'), 'xb', buffering=0) as child_file:
                     child_file.write(b'nested-synthetic')
                     os.fsync(child_file.fileno())
+                append_fd = os.open(os.path.join(write_mount_dir, 'cli-dir', 'child.bin'), os.O_WRONLY | os.O_APPEND | os.O_SYNC)
+                try:
+                    if os.write(append_fd, b'+') != 1: raise RuntimeError('nested append failed')
+                finally:
+                    os.close(append_fd)
                 child_response = request('GET', contents(child_path), params={'content': 1})
                 if not child_response.ok: raise RuntimeError('nested file read failed')
                 model = child_response.json()
                 child_data = base64.b64decode(model['content']) if model.get('format') == 'base64' else model['content'].encode()
-                if child_data != b'nested-synthetic': raise RuntimeError('nested file mismatch')
+                if child_data != b'nested-synthetic+': raise RuntimeError('nested file mismatch')
                 if {item.get('path') for item in listing(created_dir)} != {child_path}: raise RuntimeError('unexpected nested directory contents')
                 child_intents = []
                 for name in os.listdir(recovery_dir):
@@ -296,7 +301,7 @@ def main():
                     '--id', child_intents[0]['id'], '--region', a.region, '--profile', a.profile, '--endpoint', a.endpoint],
                     capture_output=True, text=True, timeout=60)
                 if diagnostic.returncode or 'confirmed=true observation=not_listed' not in diagnostic.stdout: raise RuntimeError('removed child diagnosis failed')
-                print('experimental CLI nested create, write, read, cleanup and not_listed diagnosis succeeded', flush=True)
+                print('experimental CLI nested create, write, append, read, cleanup and not_listed diagnosis succeeded', flush=True)
                 with open(os.path.join(write_mount_dir, 'upload-par.bin'), 'r+b', buffering=0) as handle:
                     handle.seek(0)
                     handle.write(b'Z')
