@@ -47,6 +47,8 @@ The experimental write mount retains local recovery entries; the default read-on
 
 ```sh
 ./aidpfs recovery list --dir /absolute/private/recovery-directory
+./aidpfs recovery inspect-create --dir /absolute/private/recovery-directory \
+  --id CREATE_INTENT_ID --region REGION --profile OCI_PROFILE
 ./aidpfs recovery lineage --dir /absolute/private/recovery-directory --id ENTRY_ID
 ./aidpfs recovery export --dir /absolute/private/recovery-directory \
   --id ENTRY_ID --output /absolute/new/recovered-file
@@ -59,7 +61,7 @@ To compare an entry with a current remote version, run:
   --id ENTRY_ID --region REGION --profile OCI_PROFILE
 ```
 
-The command generates a download PAR, compares a version-bound remote snapshot, and reports `base_version`, `uploaded_version`, `content_match_unknown_version`, or `remote_changed`. This is a point-in-time observation: matching content alone does not establish which client wrote it, and an uploaded version does not prove metadata completion or prevent a later change. It does not replay a write. If the target is missing, inaccessible, or the version changes during inspection, inspection fails and the journal remains intact.
+`inspect-create` checks the current parent listing and reports whether the target was listed as a file, directory or notebook, or was `not_listed`. This observation does not prove who created an object, whether the recorded request succeeded, or what happens after inspection. The ordinary `inspect` command generates a download PAR, compares a version-bound remote snapshot, and reports `base_version`, `uploaded_version`, `content_match_unknown_version`, or `remote_changed`. Matching content alone does not establish which client wrote it, and an uploaded version does not prove metadata completion or prevent a later change. Neither command replays a write. If the target is inaccessible or the version changes during inspection, inspection fails and the journal remains intact.
 
 Lineage validates the selected entry and its ancestors, including their contents, target and generation. It does not establish that the selected entry is the newest: other branches or incomplete entries may exist. Avoid changing the recovery directory during inspection. Export creates a 0600 file, refuses to overwrite an existing path, and leaves the journal intact. `incomplete-or-invalid` entries cannot be exported by this command; retain their directory for manual investigation. The journal contains file data and target metadata, so protect it accordingly. Entries at `put_started` or `update_started` can represent an unknown remote outcome; inspect the remote state before taking further action. These commands do not automatically replay or delete a journal.
 

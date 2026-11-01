@@ -37,6 +37,9 @@ func TestRecoveryCommands(t *testing.T) {
 	if err = runRecovery([]string{"list", "--dir", d}, &out); err != nil || !strings.Contains(out.String(), intentID) || !strings.Contains(out.String(), `"confirmed":false`) {
 		t.Fatalf("create intent missing: %v", err)
 	}
+	if err = runRecovery([]string{"inspect-create", "--dir", d, "--id", "missing", "--region", "ap-osaka-1"}, &out); err == nil {
+		t.Fatal("unknown create intent accepted")
+	}
 	out.Reset()
 	if err = runRecovery([]string{"lineage", "--dir", d, "--id", id}, &out); err != nil {
 		t.Fatal(err)

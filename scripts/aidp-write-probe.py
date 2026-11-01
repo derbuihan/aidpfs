@@ -244,6 +244,12 @@ def main():
                     intent = json.load(intent_file)
                 if intent.get('remote_path') != created_path or not os.path.isfile(os.path.join(recovery_dir, intent_files[0][:-5] + '.done')):
                     raise RuntimeError('confirmed create intent missing')
+                diagnostic = subprocess.run([a.write_mount_binary, 'recovery', 'inspect-create', '--dir', recovery_dir,
+                    '--id', intent['id'], '--region', a.region, '--profile', a.profile, '--endpoint', a.endpoint],
+                    capture_output=True, text=True, timeout=60)
+                if diagnostic.returncode or 'confirmed=true observation=file_listed' not in diagnostic.stdout or created_path in diagnostic.stdout:
+                    raise RuntimeError('create intent diagnosis failed')
+                print('experimental CLI create intent diagnosis succeeded', flush=True)
                 print('experimental CLI create, write, fsync and duplicate rejection succeeded', flush=True)
                 with open(os.path.join(write_mount_dir, 'upload-par.bin'), 'r+b', buffering=0) as handle:
                     handle.seek(0)

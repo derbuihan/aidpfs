@@ -9,16 +9,18 @@ import (
 	"io"
 	"os"
 	"path"
+	"syscall"
 	"time"
 
 	"aidpfs/internal/aidp"
+	"aidpfs/internal/backend"
 
 	"aidpfs/internal/recovery"
 )
 
 func runRecovery(args []string, out io.Writer) error {
 	if len(args) == 0 {
-		return errors.New("usage: aidpfs recovery list|lineage|export|inspect [flags]")
+		return errors.New("usage: aidpfs recovery list|lineage|export|inspect|inspect-create [flags]")
 	}
 	command := args[0]
 	fs := flag.NewFlagSet("recovery "+command, flag.ContinueOnError)
@@ -87,6 +89,58 @@ func runRecovery(args []string, out io.Writer) error {
 			return err
 		}
 		fmt.Fprintln(out, "Recovery content exported; original journal retained.")
+		return nil
+	case "inspect-create":
+		if *id == "" || *region == "" || *output != "" {
+			return errors.New("inspect-create requires --id and --region")
+		}
+		intents, err := store.ListCreates()
+		if err != nil {
+			return err
+		}
+		var selected *recovery.CreateIntent
+		for i := range intents {
+			if intents[i].ID == *id {
+				selected = &intents[i]
+				break
+			}
+		}
+		if selected == nil || selected.Invalid {
+			return errors.New("create intent not found or invalid")
+		}
+		root := path.Dir(selected.RemotePath)
+		if root == "/" {
+			return errors.New("root-level target is not supported")
+		}
+		service := *endpoint
+		if service == "" {
+			service = "https://aidp." + *region + ".oci.oraclecloud.com"
+		}
+		reader, err := aidp.New(service, selected.PlatformID, selected.WorkspaceKey, root, aidp.APIKeySigner(os.Getenv("OCI_CONFIG_FILE"), *profile))
+		if err != nil {
+			return err
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		defer cancel()
+		kind, err := reader.ListedKind(ctx, path.Base(selected.RemotePath))
+		observation := ""
+		if errors.Is(err, syscall.ENOENT) {
+			observation = "not_listed"
+		} else if err != nil {
+			return err
+		} else {
+			switch kind {
+			case backend.File:
+				observation = "file_listed"
+			case backend.Directory:
+				observation = "directory_listed"
+			case backend.Notebook:
+				observation = "notebook_listed"
+			default:
+				return syscall.EIO
+			}
+		}
+		fmt.Fprintf(out, "confirmed=%t observation=%s (point-in-time; no create replayed)\n", selected.Confirmed, observation)
 		return nil
 	case "inspect":
 		if *id == "" || *region == "" || *output != "" {

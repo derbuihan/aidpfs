@@ -337,6 +337,13 @@ func (r *Reader) listed(ctx context.Context, rel string) (backend.Kind, error) {
 	return 0, syscall.ENOENT
 }
 
+// ListedKind observes the parent listing without fetching file contents.
+// ENOENT means the path was not listed at that instant, not that a past
+// create failed or that another client cannot create it immediately after.
+func (r *Reader) ListedKind(ctx context.Context, rel string) (backend.Kind, error) {
+	return r.listed(ctx, rel)
+}
+
 func (r *Reader) Stat(ctx context.Context, rel string) (backend.Metadata, error) {
 	listedKind, err := r.listed(ctx, rel)
 	if err != nil {
