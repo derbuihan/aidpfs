@@ -24,7 +24,7 @@ mkdir -p "$HOME/aidp-mount"
 
 The process stays in the foreground. The endpoint defaults to `https://aidp.<region>.oci.oraclecloud.com`; use `--endpoint` for a different HTTPS AIDP origin. OCI configuration defaults to `~/.oci/config`; set `OCI_CONFIG_FILE` to choose another file. Credentials belong in OCI's configuration and private key files, not command arguments or logs. Use `--version` for the build version and `--help` for flags.
 
-Unmount in a second terminal with `fusermount3 -u "$HOME/aidp-mount"`, or stop the foreground process with Ctrl-C. Verify the directory is no longer mounted before removing it. If unmount fails, close processes using the mount and retry; avoid force-unmounting an unrelated filesystem.
+Unmount in a second terminal with `fusermount3 -u "$HOME/aidp-mount"`, or stop the foreground process with Ctrl-C. Verify the directory is no longer mounted before removing it. If signal-triggered unmount fails, the process reports the error and remains running; close processes using the mount and send Ctrl-C again or retry unmounting externally. Avoid force-unmounting an unrelated filesystem.
 
 ## Current behavior and limitations
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
 	"syscall"
@@ -102,12 +103,32 @@ func run() error {
 	done := make(chan os.Signal, 1)
 	signal.Notify(done, os.Interrupt, syscall.SIGTERM)
 	defer signal.Stop(done)
-	go func() { <-done; _ = server.Unmount() }()
-	server.Wait()
+	waitForUnmount(server, done, os.Stderr)
 	if experimental != nil {
 		return checkRecoveryAfterUnmount(experimental.Pending(), journal)
 	}
 	return nil
+}
+
+type mountServer interface {
+	Wait()
+	Unmount() error
+}
+
+// A failed unmount leaves the server running and permits another signal to retry.
+func waitForUnmount(server mountServer, signals <-chan os.Signal, out io.Writer) {
+	stopped := make(chan struct{})
+	go func() { server.Wait(); close(stopped) }()
+	for {
+		select {
+		case <-stopped:
+			return
+		case <-signals:
+			if err := server.Unmount(); err != nil {
+				fmt.Fprintf(out, "aidpfs: unmount failed: %v; close users of the mount and retry\n", err)
+			}
+		}
+	}
 }
 
 func checkRecoveryAfterUnmount(pending int, journal *recovery.Store) error {

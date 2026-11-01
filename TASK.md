@@ -87,6 +87,8 @@ Oracle AI Data Platform (AIDP) Workbench の workspace をローカルから操�
 
 ## 完了
 
+- 2026-11-02: signal 時の unmount 失敗を表示し、処理を継続して次の signal で再試行するよう修正。mock の失敗→再試行とローカル実 FUSE の signal unmount を確認。実 AIDP の unmount 失敗や in-flight 書き込み時は未検証。[詳細](docs/20261101_復旧データ基盤.md)。
+
 - 2026-11-02: 試験的 CLI の unmount 後、dirty buffer と未確認・不正な create intent を検出した場合にエラー終了する処理を追加。ローカルで状態判定、実 AIDP の正常な CLI mount / unmount・cleanup を確認。強制終了や終了中の in-flight request は未検証。[詳細](docs/20261101_復旧データ基盤.md)。
 
 - 2026-11-02: 同じ移動先への実 AIDP 並行 rename は要求がタイムアウトし成否不明。観測時に合成内容 2 件が残り、手動で専用領域を cleanup。試験的 FUSE の rename は `EOPNOTSUPP` とし、ローカル実 mount で dirty handle の変更保持を確認。原子性と実 mount rename は未解決。[詳細](docs/20261101_書き込みAPI実測.md)。
