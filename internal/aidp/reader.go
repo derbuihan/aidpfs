@@ -207,7 +207,7 @@ func (r *Reader) ReadDir(ctx context.Context, rel string) ([]backend.Metadata, e
 	if err != nil {
 		return nil, syscall.EINVAL
 	}
-	if rel != "" {
+	if remote != "/" {
 		kind, err := r.listed(ctx, rel)
 		if err != nil {
 			return nil, err
@@ -341,16 +341,20 @@ func (r *Reader) listed(ctx context.Context, rel string) (backend.Kind, error) {
 	if remote == "/" {
 		return backend.Directory, nil
 	}
-	// Workspace's virtual root is not necessarily listed by its parent. Verify
-	// that objects accepts the explicitly configured root instead.
+	// The API does not list /Workspace in its / response. Treat that one
+	// workspace root as a virtual directory and verify that its listing works.
 	if rel == "" {
-		_, err := r.listRemote(ctx, remote)
-		if err != nil {
-			return 0, err
+		if remote == "/Workspace" {
+			if _, err := r.listRemote(ctx, remote); err != nil {
+				return 0, err
+			}
+			return backend.Directory, nil
 		}
-		return backend.Directory, nil
 	}
-	entries, err := r.listRemote(ctx, path.Dir(remote))
+	// For any other configured root, verify its membership in its parent's
+	// complete listing. AIDP may return an empty 200 for a nonexistent path.
+	parent := path.Dir(remote)
+	entries, err := r.listRemote(ctx, parent)
 	if err != nil {
 		return 0, err
 	}

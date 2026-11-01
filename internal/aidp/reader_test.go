@@ -80,6 +80,55 @@ func TestReadDirRejectsMissingSyntheticDirectoryAndFiles(t *testing.T) {
 		}
 	})
 }
+
+func TestConfiguredSubtreeRootValidation(t *testing.T) {
+	for _, exists := range []bool{false, true} {
+		t.Run(fmt.Sprintf("exists=%t", exists), func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+				if strings.HasSuffix(req.URL.Path, "/objects") {
+					switch req.URL.Query().Get("path") {
+					case "/Workspace":
+						if exists {
+							fmt.Fprint(w, `{"items":[{"displayName":"selected","path":"/Workspace/selected","type":"FOLDER"}]}`)
+						} else {
+							fmt.Fprint(w, `{"items":[]}`)
+						}
+					case "/Workspace/selected":
+						if !exists {
+							t.Error("listed nonexistent configured root")
+						}
+						fmt.Fprint(w, `{"items":[]}`)
+					default:
+						t.Errorf("unexpected objects path %q", req.URL.Query().Get("path"))
+					}
+					return
+				}
+				if !exists || req.URL.Query().Get("content") != "0" {
+					t.Error("unexpected contents request")
+					return
+				}
+				fmt.Fprint(w, `{"name":"selected","path":"Workspace/selected","type":"directory"}`)
+			}))
+			t.Cleanup(server.Close)
+			r, err := NewWithClient(server.URL, "platform", "workspace", "/Workspace/selected", noSigner{}, server.Client())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err = r.Stat(context.Background(), ""); exists {
+				if err != nil {
+					t.Fatalf("stat valid configured root: %v", err)
+				}
+				entries, err := r.ReadDir(context.Background(), "")
+				if err != nil || len(entries) != 0 {
+					t.Fatalf("read valid empty configured root: %v %v", entries, err)
+				}
+			} else if !errors.Is(err, syscall.ENOENT) {
+				t.Fatalf("stat missing configured root = %v, want ENOENT", err)
+			}
+		})
+	}
+}
+
 func TestContentAndSize(t *testing.T) {
 	for _, tt := range []struct {
 		format, content, want, typ string
@@ -228,7 +277,7 @@ func TestRetryOnlyTransientStatuses(t *testing.T) {
 				}
 				fmt.Fprint(w, `{"items":[]}`)
 			})
-			_, err := r.ReadDir(context.Background(), "")
+			_, err := r.listRemote(context.Background(), "/Workspace")
 			if (err == nil) != tt.success || attempts != tt.attempts {
 				t.Fatalf("attempts=%d err=%v", attempts, err)
 			}
@@ -284,7 +333,7 @@ func TestTruncatedResponseIsRetried(t *testing.T) {
 		}
 		fmt.Fprint(w, `{"items":[]}`)
 	})
-	if _, err := r.ReadDir(context.Background(), ""); err != nil || calls != 2 {
+	if _, err := r.listRemote(context.Background(), "/Workspace"); err != nil || calls != 2 {
 		t.Fatalf("calls=%d error=%v", calls, err)
 	}
 }

@@ -87,6 +87,8 @@ Oracle AI Data Platform (AIDP) Workbench の workspace をローカルから操�
 
 ## 完了
 
+- 2026-11-02: remote root 以外の configured subtree も parent の complete listing で存在確認してから mount/`ReadDir` する。missing root は `ENOENT`、実在する empty FOLDER は空一覧として受け付ける。mock で両方を検証し、実 AIDP probe は `/Workspace` 下の既存 subtree で再成功。[詳細](docs/20261101_実APIと実装着手.md)。
+
 - 2026-11-02: read-only fake-backend 実 mount で directory/file mode (0500/0400)、mount owner の UID/GID、mtime、read bytes に一致する size と、write/create/chmod/chown/utimens の `EROFS` を確認。README に POSIX metadata と拒否操作を記載。実 AIDP は別に既存 mount の ls/stat/read を検証済み。[詳細](docs/20261101_実APIと実装着手.md)。
 
 - 2026-11-02: `ReadDir` が objects API の empty 200 を path 存在の証拠にしないよう、子を列挙する前に親の完全な一覧で directory type と存在を検証。存在しない synthetic directory は `ENOENT`、FILE を列挙対象にした場合は `ENOTDIR`。mock と実 AIDP live read probe で確認。[詳細](docs/20261101_実APIと実装着手.md)。
