@@ -7,7 +7,9 @@ import (
 	"strings"
 	"syscall"
 
+	"aidpfs/internal/backend"
 	"aidpfs/internal/config"
+	"aidpfs/internal/recovery"
 	"aidpfs/internal/writeback"
 )
 
@@ -84,3 +86,41 @@ func (w *parWriter) Verify(ctx context.Context, t writeback.Target, tag string, 
 }
 
 var _ writeback.Remote = (*parWriter)(nil)
+
+// OpenExperimentalBuffer prepares an existing normal file for isolated FUSE
+// experiments. It is not exposed by the CLI or a production write mount.
+func (r *Reader) OpenExperimentalBuffer(ctx context.Context, rel, region string, journal *recovery.Store) (*writeback.Buffer, error) {
+	if journal == nil || rel == "" {
+		return nil, syscall.EINVAL
+	}
+	remote, err := config.Resolve(r.root, rel)
+	if err != nil {
+		return nil, syscall.EINVAL
+	}
+	kind, err := r.listed(ctx, rel)
+	if err != nil {
+		return nil, err
+	}
+	if kind != backend.File {
+		return nil, syscall.EOPNOTSUPP
+	}
+	transport, err := newOCIParTransport(region)
+	if err != nil {
+		return nil, err
+	}
+	meta, err := r.parMetadataRequest(ctx, transport, rel, "DOWNLOAD", "", 0)
+	if err != nil {
+		return nil, err
+	}
+	if meta.ETag == "" || meta.Size == nil || *meta.Size < 0 {
+		return nil, syscall.ESTALE
+	}
+	data, err := transport.downloadVersioned(ctx, meta.URL, meta.ETag)
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) != *meta.Size {
+		return nil, syscall.ESTALE
+	}
+	return writeback.NewBuffer(writeback.Target{PlatformID: r.platformID, WorkspaceKey: r.workspaceKey, RemotePath: remote}, meta.ETag, data, journal, &parWriter{reader: r, transport: transport})
+}
