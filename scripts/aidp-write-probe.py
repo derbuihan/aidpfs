@@ -5,6 +5,7 @@ Only creates a randomly named directory under /Workspace/Shared. An interrupted
 run leaves a mode-0600 journal; cleanup never recursively removes unknown entries.
 """
 import argparse
+import base64
 import json
 import hashlib
 import os
@@ -104,7 +105,6 @@ def main():
         print('duplicate create rejected', r.status_code >= 400, flush=True)
         r = request('GET', contents(file_path), params={'content': 1})
         if r.ok:
-            import base64
             obj = r.json()
             got = base64.b64decode(obj['content']) if obj.get('format') == 'base64' else obj.get('content', '').encode()
             print('file contents format', obj.get('format'), 'bytes match', got == data, 'ETag present', bool(r.headers.get('etag')), flush=True)
@@ -129,6 +129,63 @@ def main():
                               'binary match', download.status_code == 200 and download.content == data, flush=True)
                 except requests.RequestException as exc:
                     print('PAR transfer failed', type(exc).__name__, flush=True)
+        # Isolated upload PAR: CREATE may already create a workspace object.
+        upload_path = root + '/upload-par.bin'
+        upload_bytes = bytes([23, 0, 255, 42, 128, 91, 13])
+        upload_headers = {'path': upload_path, 'type': 'FILE'}
+        created = request('POST', base + '/actions/uploadFileMeta',
+            params={'isOverwrite': 'false', 'shouldCreateRecursively': 'false', 'shouldGenerateNewPar': 'true'},
+            headers=upload_headers, json={'action': 'CREATE'})
+        if created.status_code in (200, 201):
+            owned.add(upload_path)
+            created_meta = created.json()
+            upload_url = created_meta.get('parUrl')
+            print('upload PAR present', bool(upload_url), 'create metadata ETag present', bool(created_meta.get('eTag')),
+                  'object visible before transfer', any(x.get('path') == upload_path for x in listing(root)), flush=True)
+            if upload_url:
+                parsed = urlsplit(upload_url)
+                expected_host = 'objectstorage.' + a.region + '.oraclecloud.com'
+                if parsed.scheme != 'https' or parsed.hostname != expected_host or parsed.username or parsed.password or parsed.port:
+                    raise RuntimeError('upload PAR URL origin is not expected OCI Object Storage')
+                try:
+                    with requests.Session() as par_client:
+                        par_client.trust_env = False
+                        sent = par_client.put(upload_url, data=upload_bytes, timeout=20, allow_redirects=False)
+                        put_etag = sent.headers.get('etag')
+                        print('PAR upload status', sent.status_code, 'auth absent', 'Authorization' not in sent.request.headers,
+                              'transfer ETag present', bool(put_etag), flush=True)
+                    if sent.status_code in (200, 201, 204) and put_etag:
+                        closed = request('POST', base + '/actions/uploadFileMeta', headers=upload_headers,
+                            params={'shouldCreateRecursively': 'false'}, json={'action': 'UPDATE', 'eTag': put_etag, 'size': len(upload_bytes)})
+                        print('upload close status', closed.status_code, flush=True)
+                        if closed.ok:
+                            verify = request('GET', contents(upload_path), params={'content': 1})
+                            if verify.ok:
+                                model = verify.json()
+                                binary = base64.b64decode(model['content']) if model.get('format') == 'base64' else model['content'].encode()
+                                print('closed upload bytes match', binary == upload_bytes, flush=True)
+                except requests.RequestException as exc:
+                    print('PAR upload transfer failed', type(exc).__name__, flush=True)
+        else:
+            print('upload PAR create did not succeed; unknown objects stop cleanup', flush=True)
+        # Probe duplicate create and a transfer interrupted immediately after CREATE.
+        if created.status_code in (200, 201):
+            duplicate = request('POST', base + '/actions/uploadFileMeta',
+                params={'isOverwrite': 'false', 'shouldCreateRecursively': 'false', 'shouldGenerateNewPar': 'true'},
+                headers=upload_headers, json={'action': 'CREATE'})
+            verify = request('GET', contents(upload_path), params={'content': 1})
+            if verify.ok:
+                model = verify.json()
+                restored = base64.b64decode(model['content']) if model.get('format') == 'base64' else model['content'].encode()
+                print('upload duplicate create status', duplicate.status_code, 'previous data preserved', restored == upload_bytes, flush=True)
+        interrupted_path = root + '/upload-interrupted.bin'
+        interrupted = request('POST', base + '/actions/uploadFileMeta',
+            params={'isOverwrite': 'false', 'shouldCreateRecursively': 'false', 'shouldGenerateNewPar': 'true'},
+            headers={'path': interrupted_path, 'type': 'FILE'}, json={'action': 'CREATE'})
+        if interrupted.status_code in (200, 201):
+            owned.add(interrupted_path)
+            present = any(x.get('path') == interrupted_path for x in listing(root))
+            print('interrupted upload leaves listed object', present, flush=True)
         # Compare WorkspaceObject PUT behavior with the data-plane eTag
         # returned by downloadFileMeta; all payloads remain inside this run's file.
         if par_response.ok and par_response.json().get('eTag'):
@@ -234,7 +291,8 @@ def main():
                     if r.status_code not in (200, 204): raise RuntimeError('folder deletion failed')
                     remains = any(x.get('path') == root for x in listing('/Workspace/Shared'))
                     print('cleanup verified', not remains, flush=True)
-                    if not remains: journal.unlink()
+                    if remains: raise RuntimeError('probe root remains after deletion')
+                    journal.unlink()
             except (Exception, KeyboardInterrupt) as e:
                 print('cleanup incomplete:', type(e).__name__, 'journal retained', flush=True)
                 raise RuntimeError('cleanup incomplete; inspect the private journal') from e
