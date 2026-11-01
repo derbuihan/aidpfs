@@ -14,7 +14,7 @@ Oracle AI Data Platform (AIDP) Workbench の workspace をローカルから操�
 ### 1. 実環境・読み取り API 調査
 
 - [x] **環境**: 2026-11-02 の現在の実行環境で Ubuntu 26.04.1、Linux 7.0.0-42-generic、Go 1.26.8、`/dev/fuse` の mode 0666・読み書き可能、`fusermount3` を確認。2026-11-01 の実 AIDP read-only mount / unmount 記録も照合。Docker daemon は不要なため確認対象外。隔離された別実行環境では `/dev/fuse` が見えなかった記録と分けて記載。[詳細](docs/20261101_端末環境と調査元.md)。
-- [ ] **接続**: 対象 profile・region・AIDP endpoint・platform ID・workspace key・接続経路と権限を読み取りで確認する。workspace が ACTIVE であることと内容 API が利用可能なことを分けて記録する。
+- [x] **接続**: 2026-11-02、OCI API key profile `OCI_TOKYO` / `ap-osaka-1` / `https://aidp.ap-osaka-1.oci.oraclecloud.com` で対象 platform `aidp-sandbox` と workspace `sandbox` が ACTIVE であることを control-plane / workspace API から別々に確認。workspace key で署名付き objects と既存 FILE・NOTEBOOK contents GET が成功し、読み取り権限を実証。ID/key は記録せず。[詳細](docs/20261101_実APIと実装着手.md)。
 - [ ] **一覧**: `GET /objects` の root・指定 path・直接の子・空ディレクトリ・非ファイル object・権限による結果を確認し、`opc-next-page` を使って複数ページを最後まで取得する。
 - [ ] **内容**: 既存の通常ファイルと notebook を対象に `objects` の path と `contents`、PAR の対応を調べ、bytes、format、size、時刻、type、ETag、名前の一致を検証する。directory の contents 一覧は前提にしない。
 - [ ] **境界**: 日本語・空白・`%`・`#`・階層区切り、root、長い名前、存在しない path、権限不足、失効した認証、429/5xx を検証できる範囲で確認する。結果には日時・操作・status・request ID・未確認事項を残す。
@@ -86,6 +86,8 @@ Oracle AI Data Platform (AIDP) Workbench の workspace をローカルから操�
 - 以前の隔離された Codex 実行環境では `/dev/fuse` が見えなかった。2026-11-01 の今回の実行環境ではデバイスを読み書き可能で、読み取り専用 mount と unmount を確認済み。
 
 ## 完了
+
+- 2026-11-02: 実 AIDP の読み取り確認を Go の opt-in `TestLiveReadOnlyWorkspace` に追加。現在の専用 sandbox workspace を再帰列挙し、FILE 115 bytes と NOTEBOOK JSON 2065 bytes の表示名/type/path、object と contents の更新時刻、`stat` サイズ、再読込 bytes を照合。どちらも content API は `size: null` / HTTP ETag 無し、objects は `compositeEtag` 無しだった。実データは出力・保存していない。[詳細](docs/20261101_実APIと実装着手.md)。
 
 - 2026-11-02: OCI API の error code を status と併せて errno に対応付ける処理を追加。`NotAuthorizedOrNotFound` は存在と認可を区別せず `ENOENT` にし、`InvalidParameter`、`ResourceLocked`、`NoEtagMatch`、`PayloadTooLarge` などは個別 errno とする。mock の status/code 組合せとエラー文字列への code 非露出を確認。[詳細](docs/20261101_読み取り再試行と安全性.md)。
 
