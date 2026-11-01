@@ -87,6 +87,8 @@ Oracle AI Data Platform (AIDP) Workbench の workspace をローカルから操�
 
 ## 完了
 
+- 2026-11-02: 試験用 FUSE で開いた handle の属性と truncate が remote 属性の再取得に依存しないよう修正。ローカル実 mount / fake で外部削除後の fstat・truncate、同期失敗と journal 内容の保持を確認。実 AIDP の外部削除・rename との競合は未検証。[詳細](docs/20261101_復旧データ基盤.md)。
+
 - 2026-11-02: 試験用 FUSE の読み取り専用 handle の close が、別の書き込み handle の dirty buffer を送信しないよう修正。ローカル実 mount と fake backend で journal 保持・後続 fsync を確認。実 AIDP やエディタでの同条件は未検証。[詳細](docs/20261101_復旧データ基盤.md)。
 
 - 2026-11-01: 実 AIDP の専用領域で非空フォルダへの contents DELETE が 204 を返し、フォルダと子が取得できなくなることを確認。`rmdir` の事前空確認だけでは他 client の同時作成を保護できないため、競合安全な実装は未完了。[詳細](docs/20261101_書き込みAPI実測.md)。

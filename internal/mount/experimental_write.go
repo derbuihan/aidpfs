@@ -77,6 +77,7 @@ type experimentalNode struct {
 type editHandle struct {
 	buffer   *writeback.Buffer
 	writable bool
+	metadata backend.Metadata
 }
 
 func editAttrs(out *fuse.Attr, m backend.Metadata, b *writeback.Buffer) {
@@ -88,7 +89,11 @@ func editAttrs(out *fuse.Attr, m backend.Metadata, b *writeback.Buffer) {
 		out.Size = uint64(b.Size())
 	}
 }
-func (n *experimentalNode) Getattr(ctx context.Context, _ fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
+func (n *experimentalNode) Getattr(ctx context.Context, fh fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
+	if h, ok := fh.(*editHandle); ok {
+		editAttrs(&out.Attr, h.metadata, h.buffer)
+		return 0
+	}
 	m, e := n.reader.Stat(ctx, n.rel)
 	if e != nil {
 		return errno(e)
@@ -128,6 +133,13 @@ func (n *experimentalNode) Open(ctx context.Context, flags uint32) (fs.FileHandl
 	if flags&syscall.O_APPEND != 0 {
 		return nil, 0, syscall.EOPNOTSUPP
 	}
+	m, e := n.reader.Stat(ctx, n.rel)
+	if e != nil {
+		return nil, 0, errno(e)
+	}
+	if m.Kind == backend.Directory {
+		return nil, 0, syscall.EISDIR
+	}
 	b, e := n.buffers.get(ctx, n.rel)
 	if e != nil {
 		return nil, 0, errno(e)
@@ -143,7 +155,7 @@ func (n *experimentalNode) Open(ctx context.Context, flags uint32) (fs.FileHandl
 			return nil, 0, errno(e)
 		}
 	}
-	return &editHandle{b, writable}, fuse.FOPEN_DIRECT_IO, 0
+	return &editHandle{buffer: b, writable: writable, metadata: m}, fuse.FOPEN_DIRECT_IO, 0
 }
 func (n *experimentalNode) Read(_ context.Context, fh fs.FileHandle, dest []byte, off int64) (fuse.ReadResult, syscall.Errno) {
 	h, ok := fh.(*editHandle)
@@ -173,13 +185,19 @@ func (n *experimentalNode) Setattr(ctx context.Context, fh fs.FileHandle, in *fu
 		return syscall.EFBIG
 	}
 	var b *writeback.Buffer
+	var m backend.Metadata
 	if h, ok := fh.(*editHandle); ok {
 		if !h.writable {
 			return syscall.EBADF
 		}
 		b = h.buffer
+		m = h.metadata
 	} else {
 		var e error
+		m, e = n.reader.Stat(ctx, n.rel)
+		if e != nil {
+			return errno(e)
+		}
 		b, e = n.buffers.get(ctx, n.rel)
 		if e != nil {
 			return errno(e)
@@ -189,7 +207,8 @@ func (n *experimentalNode) Setattr(ctx context.Context, fh fs.FileHandle, in *fu
 	if e := b.Truncate(int64(size)); e != nil {
 		return errno(e)
 	}
-	return n.Getattr(ctx, fh, out)
+	editAttrs(&out.Attr, m, b)
+	return 0
 }
 func (n *experimentalNode) Flush(ctx context.Context, fh fs.FileHandle) syscall.Errno {
 	h, ok := fh.(*editHandle)

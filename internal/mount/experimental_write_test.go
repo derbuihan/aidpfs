@@ -49,6 +49,9 @@ func (r *mountRemote) Verify(_ context.Context, _ writeback.Target, tag string, 
 	return nil
 }
 func testExperimentalMount(t *testing.T, remote *mountRemote) (string, *recovery.Store) {
+	return testExperimentalMountReader(t, remote, &fake{data: []byte("abcd")})
+}
+func testExperimentalMountReader(t *testing.T, remote *mountRemote, reader *fake) (string, *recovery.Store) {
 	t.Helper()
 	if _, e := os.Stat("/dev/fuse"); e != nil {
 		t.Skip("FUSE unavailable")
@@ -62,7 +65,6 @@ func testExperimentalMount(t *testing.T, remote *mountRemote) (string, *recovery
 	if e != nil {
 		t.Fatal(e)
 	}
-	reader := &fake{data: []byte("abcd")}
 	server, e := mountExperimental(context.Background(), d, reader, func(_ context.Context, rel string) (*writeback.Buffer, error) {
 		if rel != "file" {
 			return nil, syscall.ENOENT
@@ -281,5 +283,43 @@ func TestExperimentalReadOnlyCloseDoesNotFlushOtherHandle(t *testing.T) {
 	remote.mu.Unlock()
 	if puts != 1 || got != "newd" {
 		t.Fatalf("writer sync: puts=%d bytes=%q", puts, got)
+	}
+}
+
+func TestExperimentalOpenHandleSurvivesRemoteStatFailure(t *testing.T) {
+	remote := &mountRemote{tag: "old", fail: true}
+	reader := &fake{data: []byte("abcd")}
+	d, store := testExperimentalMountReader(t, remote, reader)
+	name := filepath.Join(d, "file")
+	f, err := os.OpenFile(name, os.O_RDWR, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reader.mu.Lock()
+	reader.deleted = true
+	reader.mu.Unlock()
+	if err = f.Truncate(2); err != nil {
+		t.Fatalf("handle truncate: %v", err)
+	}
+	st, err := f.Stat()
+	if err != nil || st.Size() != 2 {
+		t.Fatalf("handle stat: %v %v", st, err)
+	}
+	if _, err = os.Stat(name); !errors.Is(err, syscall.ENOENT) {
+		t.Fatalf("path stat: %v", err)
+	}
+	if err = f.Sync(); !errors.Is(err, syscall.EIO) {
+		t.Fatalf("sync: %v", err)
+	}
+	if err = f.Close(); !errors.Is(err, syscall.EIO) {
+		t.Fatalf("close: %v", err)
+	}
+	entries, err := store.List()
+	if err != nil || len(entries) != 1 || entries[0].Stage != recovery.PutStarted {
+		t.Fatalf("journal: %v %v", entries, err)
+	}
+	_, data, err := store.Load(entries[0].ID)
+	if err != nil || string(data) != "ab" {
+		t.Fatalf("journal content error: %v", err)
 	}
 }
