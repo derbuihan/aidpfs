@@ -35,6 +35,18 @@ Unmount in a second terminal with `fusermount3 -u "$HOME/aidp-mount"`, or stop t
 - Unsupported object types cause directory listing to fail, rather than being silently hidden. The `objects` and contents APIs do not have identical path behavior; only the tested `/Workspace` subtree is known to work. Directory listing, permissions, and paths may differ across AIDP deployments.
 - GET requests alone are retried for selected transient failures. No upload/download PAR workflow is used by the filesystem. Workbench UI, editors, Git operations, multi-user access and large-file behavior are not yet verified end to end.
 
+## Recovery journal inspection
+
+The experimental save coordinator can retain local recovery entries, but it is not connected to the current read-only FUSE mount. For an existing private recovery directory, inspect entries and export verified journal contents to a **new** local file:
+
+```sh
+./aidpfs recovery list --dir /absolute/private/recovery-directory
+./aidpfs recovery export --dir /absolute/private/recovery-directory \
+  --id ENTRY_ID --output /absolute/new/recovered-file
+```
+
+Export creates a 0600 file, refuses to overwrite an existing path, and leaves the journal intact. `incomplete-or-invalid` entries cannot be exported by this command; retain their directory for manual investigation. The journal contains file data and target metadata, so protect it accordingly. Entries at `put_started` or `update_started` can represent an unknown remote outcome; inspect the remote state before taking further action. These commands do not automatically replay or delete a journal.
+
 ## Validation and development
 
 Once Go module dependencies are available locally, `make test` runs without OCI credentials or external network access; tests use local HTTP servers and a fake backend. A FUSE mount test is skipped if the device or mount permissions are unavailable. `go test -race ./...` and `go vet ./...` provide additional checks. Some integrations require an actual AIDP workspace and FUSE-capable host; successful local tests do not prove those integrations.
