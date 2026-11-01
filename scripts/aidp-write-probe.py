@@ -275,6 +275,7 @@ def main():
                         'AIDPFS_PROBE_ENDPOINT': a.endpoint})
             result = subprocess.run(['go', 'test', '-p=1', '-count=1', '-run', '^TestLive(PAR|FUSE)IsolatedFixture$', '-v', './internal/aidp', './internal/mount'], env=env, timeout=120)
             if result.returncode: raise RuntimeError('Go live PAR test failed')
+            owned.add(root + '/go-created-empty.bin')
             # The Go test restores bytes, but the underlying object has a new ETag.
             updated_meta = request('POST', base + '/actions/downloadFileMeta',
                 params={'shouldGenerateNewPar': 'true'}, headers=upload_headers)

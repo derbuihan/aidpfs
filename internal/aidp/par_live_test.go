@@ -182,6 +182,21 @@ func TestLivePARIsolatedFixture(t *testing.T) {
 		t.Fatalf("race restore read: %v", err)
 	}
 	exerciseLiveCrash(t, ctx, r, par, root, region, original)
+	if err = r.CreateEmptyExperimental(ctx, "go-created-empty.bin"); err != nil {
+		t.Fatalf("create empty fixture: %v", err)
+	}
+	empty, err := r.ReadFile(ctx, "go-created-empty.bin")
+	if err != nil || len(empty) != 0 {
+		t.Fatalf("empty fixture read: %v", err)
+	}
+	if err = r.CreateEmptyExperimental(ctx, "go-created-empty.bin"); !errors.Is(err, syscall.EEXIST) {
+		t.Fatalf("duplicate create: %v", err)
+	}
+	empty, err = r.ReadFile(ctx, "go-created-empty.bin")
+	if err != nil || len(empty) != 0 {
+		t.Fatalf("duplicate changed fixture: %v", err)
+	}
+	t.Log("empty FILE created; duplicate rejected without overwrite")
 }
 
 // Child mutates only the UUID-scoped synthetic file, then waits before writing

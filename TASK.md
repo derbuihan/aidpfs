@@ -87,6 +87,8 @@ Oracle AI Data Platform (AIDP) Workbench の workspace をローカルから操�
 
 ## 完了
 
+- 2026-11-02: 上書き禁止の空 FILE 新規作成 backend を追加。mock で重複・切断・5xx の非再試行、実 AIDP の専用領域で作成・空内容・重複拒否・cleanup を確認。FUSE create、作成結果不明の復旧と複数 client 競合は未実装。[詳細](docs/20261101_復旧データ基盤.md)。
+
 - 2026-11-02: 試験的書き込み CLI は空の private recovery directory のみ受け付け、起動中は同ディレクトリを排他。ローカル試験で別プロセスのロック、非空時の起動拒否、既存データ保持を確認。別 directory を使う mount 同士や他 client の競合は防がない。[詳細](docs/20261101_復旧データ基盤.md)。
 
 - 2026-11-02: 既存 FILE 限定の試験的書き込み mount を `--experimental-write` と専用 `--recovery-dir` の組で CLI に接続。実 AIDP の専用合成 FILE で CLI mount、write・fsync・別 API の読取、復元・unmount・cleanup を確認。create/rename/delete、notebook、エディタ、完全な競合保護は未対応。[詳細](docs/20261101_復旧データ基盤.md)。

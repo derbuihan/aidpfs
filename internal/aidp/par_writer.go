@@ -13,9 +13,8 @@ import (
 	"aidpfs/internal/writeback"
 )
 
-// parWriter connects the experimental writeback coordinator to OCI. It is
-// intentionally not exposed through FUSE until recovery and rename semantics
-// have been verified end-to-end.
+// parWriter connects the opt-in experimental writeback coordinator to OCI.
+// Recovery and rename semantics are not yet verified end-to-end.
 type parWriter struct {
 	reader    *Reader
 	transport *parTransport
@@ -87,8 +86,8 @@ func (w *parWriter) Verify(ctx context.Context, t writeback.Target, tag string, 
 
 var _ writeback.Remote = (*parWriter)(nil)
 
-// OpenExperimentalBuffer prepares an existing normal file for isolated FUSE
-// experiments. It is not exposed by the CLI or a production write mount.
+// OpenExperimentalBuffer prepares an existing normal file for the opt-in
+// experimental mount. It is not a production write implementation.
 func (r *Reader) OpenExperimentalBuffer(ctx context.Context, rel, region string, journal *recovery.Store) (*writeback.Buffer, error) {
 	if journal == nil || rel == "" {
 		return nil, syscall.EINVAL
