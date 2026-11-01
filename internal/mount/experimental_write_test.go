@@ -487,4 +487,39 @@ func TestExperimentalDeleteOperationsAreUnsupported(t *testing.T) {
 	if got := n.Rmdir(context.Background(), "dir"); got != syscall.EOPNOTSUPP {
 		t.Fatalf("rmdir: %v", got)
 	}
+	if got := n.Rename(context.Background(), "file", n, "other", 0); got != syscall.EOPNOTSUPP {
+		t.Fatalf("rename: %v", got)
+	}
+}
+
+func TestExperimentalRenameRefusedWithDirtyHandle(t *testing.T) {
+	remote := &mountRemote{tag: "old"}
+	d, store := testExperimentalMount(t, remote)
+	name := filepath.Join(d, "file")
+	f, err := os.OpenFile(name, os.O_RDWR, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = f.WriteAt([]byte("X"), 0); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.Rename(name, filepath.Join(d, "other")); !errors.Is(err, syscall.EOPNOTSUPP) {
+		t.Fatalf("rename: %v", err)
+	}
+	entries, err := store.List()
+	if err != nil || len(entries) != 1 || entries[0].Stage != recovery.Prepared {
+		t.Fatalf("journal: %v %v", entries, err)
+	}
+	if err = f.Sync(); err != nil {
+		t.Fatal(err)
+	}
+	if err = f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	remote.mu.Lock()
+	got := string(remote.data)
+	remote.mu.Unlock()
+	if got != "Xbcd" {
+		t.Fatal("dirty data not preserved")
+	}
 }

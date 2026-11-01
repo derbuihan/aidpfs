@@ -153,6 +153,11 @@ func (n *experimentalNode) Unlink(context.Context, string) syscall.Errno {
 func (n *experimentalNode) Rmdir(context.Context, string) syscall.Errno {
 	return syscall.EOPNOTSUPP
 }
+
+// AIDP rename preconditions and open/dirty-handle semantics are unresolved.
+func (n *experimentalNode) Rename(context.Context, string, fs.InodeEmbedder, string, uint32) syscall.Errno {
+	return syscall.EOPNOTSUPP
+}
 func (n *experimentalNode) Getattr(ctx context.Context, fh fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
 	if h, ok := fh.(*editHandle); ok {
 		editAttrs(&out.Attr, h.metadata, h.buffer)

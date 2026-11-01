@@ -43,7 +43,7 @@ This mode is incomplete: it cannot rename or delete files or save notebooks, and
 
 Append operations opened with `O_APPEND` are serialized within one mount's shared buffer. They do not provide atomic append across mounts or other AIDP clients. The append flag is captured on open; changing it later with `fcntl` is unsupported and can cause incorrect offsets.
 
-Experimental `unlink` and `rmdir` return `EOPNOTSUPP`. In the tested AIDP environment, both contents and WorkspaceObject DELETE removed a synthetic file despite an incorrect `if-match`; contents DELETE also removed a nonempty synthetic directory and its child. These observations do not establish safe conditional deletion.
+Experimental `unlink`, `rmdir` and `rename` return `EOPNOTSUPP`. In the tested AIDP environment, both contents and WorkspaceObject DELETE removed a synthetic file despite an incorrect `if-match`; contents DELETE also removed a nonempty synthetic directory and its child. Rename accepted an incorrect `if-match`, and one concurrent rename experiment timed out. These observations do not establish safe conditional deletion or rename.
 
 ## Recovery journal inspection
 

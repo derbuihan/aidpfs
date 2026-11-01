@@ -5,6 +5,7 @@ Only creates a randomly named directory under /Workspace/Shared. An interrupted
 run leaves a mode-0600 journal; cleanup never recursively removes unknown entries.
 """
 import argparse
+import concurrent.futures
 import errno
 import base64
 import json
@@ -35,6 +36,7 @@ def main():
     p.add_argument('--write-mount-binary', help='optional aidpfs executable for isolated experimental write checks')
     p.add_argument('--region', default='ap-osaka-1')
     p.add_argument('--go-par-test', action='store_true', help='run Go live PAR integration against this run only')
+    p.add_argument('--rename-race', action='store_true', help='run potentially ambiguous concurrent rename experiment')
     a = p.parse_args()
     if not a.endpoint.startswith('https://') or '/' in a.endpoint[8:]:
         p.error('endpoint must be an HTTPS origin')
@@ -84,6 +86,7 @@ def main():
     open_handle = None
     owned = set()
     nested_pending = False
+    rename_race_pending = False
     try:
         if any(x.get('path') == root for x in listing('/Workspace/Shared')):
             raise RuntimeError('random probe root already exists')
@@ -145,6 +148,44 @@ def main():
                 preserved = observed == b'synthetic-delete-probe'
             print('conditional delete', label, 'status', deleted.status_code, 'listed', remaining,
                   'GET status', check.status_code, 'original preserved', preserved, flush=True)
+        if a.rename_race:
+            # Two synthetic source files compete for one previously absent name.
+            # Any unconfirmed destination remains unknown and stops cleanup.
+            race_sources = [root + '/rename-race-a.bin', root + '/rename-race-b.bin']
+            race_dest = root + '/rename-race-dest.bin'
+            for idx, race_source in enumerate(race_sources):
+                response = request('POST', base + '/objects', headers={'path': race_source, 'type': 'FILE', 'is-overwrite': 'false', 'Content-Type': 'application/octet-stream'}, data=bytes([65 + idx]))
+                if response.status_code not in (200, 201): raise RuntimeError('rename race fixture creation failed')
+                owned.add(race_source)
+            if any(item.get('path') == race_dest for item in listing(root)): raise RuntimeError('rename destination unexpectedly exists')
+            rename_race_pending = True
+            def race_rename(src):
+                local_config = oci.config.from_file(profile_name=a.profile)
+                local_signer = oci.signer.Signer(tenancy=local_config['tenancy'], user=local_config['user'], fingerprint=local_config['fingerprint'], private_key_file_location=local_config['key_file'], pass_phrase=local_config.get('pass_phrase'))
+                with requests.Session() as local_session:
+                    local_session.auth = local_signer
+                    try:
+                        response = local_session.patch(contents(src), json={'path': race_dest.lstrip('/')}, timeout=20, allow_redirects=False)
+                        return response.status_code, response.headers.get('opc-request-id'), None
+                    except requests.RequestException as exc:
+                        return None, None, type(exc).__name__
+            with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+                race_responses = list(pool.map(race_rename, race_sources))
+            if any(status in (200, 201) for status, _, _ in race_responses): owned.add(race_dest)
+            race_listing = {item.get('path') for item in listing(root)}
+            race_contents = []
+            for candidate in race_sources + [race_dest]:
+                response = request('GET', contents(candidate), params={'content': 1})
+                if response.ok:
+                    model = response.json()
+                    value = base64.b64decode(model['content']) if model.get('format') == 'base64' else model['content'].encode()
+                    race_contents.append(value)
+            print('rename same destination concurrent results', race_responses,
+                  'source count', sum(src in race_listing for src in race_sources), 'destination present', race_dest in race_listing,
+                  'both synthetic contents retained', sorted(race_contents) == [b'A', b'B'], flush=True)
+            if any(status is None or status >= 500 or status == 408 for status, _, _ in race_responses):
+                raise RuntimeError('rename outcome unknown; manual inspection required')
+            rename_race_pending = False
         file_path = root + '/binary.bin'
         data = bytes([0, 1, 2, 127, 128, 255])
         r = request('POST', base + '/objects', headers={'path': file_path, 'type': 'FILE', 'is-overwrite': 'false', 'Content-Type': 'application/octet-stream'}, data=data)
@@ -684,7 +725,7 @@ def main():
             os.rmdir(mount_dir)
         if created_root:
             try:
-                if nested_pending: raise RuntimeError('nested probe outcome requires manual inspection')
+                if nested_pending or rename_race_pending: raise RuntimeError('nested or rename probe outcome requires manual inspection')
                 children = listing(root)
                 unknown = [x for x in children if x.get('path') not in owned]
                 if unknown:

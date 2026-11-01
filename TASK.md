@@ -87,6 +87,8 @@ Oracle AI Data Platform (AIDP) Workbench の workspace をローカルから操�
 
 ## 完了
 
+- 2026-11-02: 同じ移動先への実 AIDP 並行 rename は要求がタイムアウトし成否不明。観測時に合成内容 2 件が残り、手動で専用領域を cleanup。試験的 FUSE の rename は `EOPNOTSUPP` とし、ローカル実 mount で dirty handle の変更保持を確認。原子性と実 mount rename は未解決。[詳細](docs/20261101_書き込みAPI実測.md)。
+
 - 2026-11-02: 実 AIDP の専用 FILE で不正 `if-match` を付けた contents / WorkspaceObject DELETE が各 204 で削除することを確認。試験的 FUSE の unlink / rmdir は `EOPNOTSUPP` とし、実 mount で拒否・対象保持と cleanup を確認。競合安全な削除は未実装。[詳細](docs/20261101_書き込みAPI実測.md)。
 
 - 2026-11-02: 試験的 FUSE で `O_APPEND` を追加。ローカル実 mount で共有 handle の並行追記と同期失敗時 journal 保持、実 AIDP の専用 FILE で `O_APPEND|O_SYNC` と REST 読取・cleanup を確認。別 mount・外部 client の追記競合や open 後の flag 変更は未対応。[詳細](docs/20261101_復旧データ基盤.md)。
