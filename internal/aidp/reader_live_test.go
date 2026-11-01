@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"os"
 	"path"
+	"regexp"
+	"strings"
 	"testing"
 	"time"
 
@@ -88,6 +90,43 @@ func TestLiveReadOnlyWorkspace(t *testing.T) {
 		}
 		t.Logf("%s: format=%s bytes=%d size_matches=true modified_matches_object=true composite_etag_present=%t", kindName(kind), content.Format, len(data), sample.meta.Version != "")
 	}
+}
+
+// TestLiveNotebookAutosaveMarker verifies a Workbench auto-save from a
+// dedicated synthetic notebook using the signed contents API. The marker is
+// supplied by the caller and is never included in test output.
+func TestLiveNotebookAutosaveMarker(t *testing.T) {
+	if os.Getenv("AIDPFS_LIVE_NOTEBOOK_AUTOSAVE") != "enabled" {
+		t.Skip("Workbench auto-save probe not requested")
+	}
+	root := os.Getenv("AIDPFS_PROBE_ROOT")
+	if !regexp.MustCompile(`^/Workspace/Shared/aidpfs-ui-probe-[0-9a-f]{32}$`).MatchString(root) {
+		t.Fatal("auto-save probe requires the dedicated aidpfs-ui-probe subtree")
+	}
+	name := os.Getenv("AIDPFS_LIVE_NOTEBOOK_NAME")
+	marker := os.Getenv("AIDPFS_LIVE_NOTEBOOK_MARKER")
+	if name == "" || strings.ContainsAny(name, "/\\") || marker == "" {
+		t.Fatal("auto-save probe requires a notebook name and marker")
+	}
+	platform, workspace := os.Getenv("AIDPFS_PROBE_PLATFORM"), os.Getenv("AIDPFS_PROBE_WORKSPACE")
+	profile, region, endpoint := os.Getenv("AIDPFS_PROBE_PROFILE"), os.Getenv("AIDPFS_PROBE_REGION"), os.Getenv("AIDPFS_PROBE_ENDPOINT")
+	if platform == "" || workspace == "" || profile == "" || region == "" || endpoint == "" {
+		t.Fatal("live probe configuration is incomplete")
+	}
+	r, err := New(endpoint, platform, workspace, root, APIKeySigner(os.Getenv("OCI_CONFIG_FILE"), profile))
+	if err != nil {
+		t.Fatal("invalid live probe configuration")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	data, err := r.ReadFile(ctx, name)
+	if err != nil {
+		t.Fatalf("read synthetic notebook after Workbench auto-save: %v", err)
+	}
+	if !bytes.Contains(data, []byte(marker)) {
+		t.Fatal("signed contents API does not contain the auto-save marker")
+	}
+	t.Log("signed contents API contains the synthetic auto-save marker")
 }
 
 func kindName(kind backend.Kind) string {
