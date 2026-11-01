@@ -87,6 +87,8 @@ Oracle AI Data Platform (AIDP) Workbench の workspace をローカルから操�
 
 ## 完了
 
+- 2026-11-02: `ReadDir` が objects API の empty 200 を path 存在の証拠にしないよう、子を列挙する前に親の完全な一覧で directory type と存在を検証。存在しない synthetic directory は `ENOENT`、FILE を列挙対象にした場合は `ENOTDIR`。mock と実 AIDP live read probe で確認。[詳細](docs/20261101_実APIと実装着手.md)。
+
 - 2026-11-02: 実 AIDP の読み取り確認を Go の opt-in `TestLiveReadOnlyWorkspace` に追加。現在の専用 sandbox workspace を再帰列挙し、FILE 115 bytes と NOTEBOOK JSON 2065 bytes の表示名/type/path、object と contents の更新時刻、`stat` サイズ、再読込 bytes を照合。どちらも content API は `size: null` / HTTP ETag 無し、objects は `compositeEtag` 無しだった。実データは出力・保存していない。[詳細](docs/20261101_実APIと実装着手.md)。
 
 - 2026-11-02: OCI API の error code を status と併せて errno に対応付ける処理を追加。`NotAuthorizedOrNotFound` は存在と認可を区別せず `ENOENT` にし、`InvalidParameter`、`ResourceLocked`、`NoEtagMatch`、`PayloadTooLarge` などは個別 errno とする。mock の status/code 組合せとエラー文字列への code 非露出を確認。[詳細](docs/20261101_読み取り再試行と安全性.md)。

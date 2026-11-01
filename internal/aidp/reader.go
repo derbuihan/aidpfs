@@ -207,6 +207,15 @@ func (r *Reader) ReadDir(ctx context.Context, rel string) ([]backend.Metadata, e
 	if err != nil {
 		return nil, syscall.EINVAL
 	}
+	if rel != "" {
+		kind, err := r.listed(ctx, rel)
+		if err != nil {
+			return nil, err
+		}
+		if kind != backend.Directory {
+			return nil, syscall.ENOTDIR
+		}
+	}
 	return r.listRemote(ctx, remote)
 }
 

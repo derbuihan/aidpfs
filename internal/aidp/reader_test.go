@@ -29,18 +29,23 @@ func serverReader(t *testing.T, h http.HandlerFunc) *Reader {
 }
 func TestPagingAndPaths(t *testing.T) {
 	r := serverReader(t, func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Query().Get("path") != "/Workspace/日本 語%#" {
-			t.Error("incorrect query path")
+		switch r.URL.Query().Get("path") {
+		case "/Workspace":
+			fmt.Fprint(w, `{"items":[{"displayName":"日本 語%#","path":"/Workspace/日本 語%#","type":"FOLDER"}]}`)
+		case "/Workspace/日本 語%#":
+			if r.URL.Query().Get("page") == "" {
+				w.Header().Set("opc-next-page", "next%token")
+				fmt.Fprint(w, `{"items":[{"displayName":"one","path":"/Workspace/日本 語%#/one","type":"FILE"}]}`)
+				return
+			}
+			if r.URL.Query().Get("page") != "next%token" {
+				t.Error("incorrect token")
+			}
+			fmt.Fprint(w, `{"items":[]}`)
+		default:
+			t.Errorf("unexpected query path %q", r.URL.Query().Get("path"))
+			fmt.Fprint(w, `{"items":[]}`)
 		}
-		if r.URL.Query().Get("page") == "" {
-			w.Header().Set("opc-next-page", "next%token")
-			fmt.Fprint(w, `{"items":[{"displayName":"one","path":"/Workspace/日本 語%#/one","type":"FILE"}]}`)
-			return
-		}
-		if r.URL.Query().Get("page") != "next%token" {
-			t.Error("incorrect token")
-		}
-		fmt.Fprint(w, `{"items":[]}`)
 	})
 	entries, e := r.ReadDir(context.Background(), "日本 語%#")
 	if e != nil || len(entries) != 1 || entries[0].Name != "one" {
@@ -49,6 +54,31 @@ func TestPagingAndPaths(t *testing.T) {
 	if _, e = r.ReadDir(context.Background(), "../escape"); !errors.Is(e, syscall.EINVAL) {
 		t.Fatalf("unexpected error %v", e)
 	}
+}
+
+func TestReadDirRejectsMissingSyntheticDirectoryAndFiles(t *testing.T) {
+	t.Run("missing synthetic directory", func(t *testing.T) {
+		r := serverReader(t, func(w http.ResponseWriter, req *http.Request) {
+			if req.URL.Query().Get("path") != "/Workspace" {
+				t.Errorf("unexpected child listing for %q", req.URL.Query().Get("path"))
+			}
+			fmt.Fprint(w, `{"items":[]}`)
+		})
+		if _, err := r.ReadDir(context.Background(), "missing"); !errors.Is(err, syscall.ENOENT) {
+			t.Fatalf("ReadDir missing error = %v, want ENOENT", err)
+		}
+	})
+	t.Run("file path", func(t *testing.T) {
+		r := serverReader(t, func(w http.ResponseWriter, req *http.Request) {
+			if req.URL.Query().Get("path") != "/Workspace" {
+				t.Errorf("unexpected child listing for %q", req.URL.Query().Get("path"))
+			}
+			fmt.Fprint(w, `{"items":[{"displayName":"file","path":"/Workspace/file","type":"FILE"}]}`)
+		})
+		if _, err := r.ReadDir(context.Background(), "file"); !errors.Is(err, syscall.ENOTDIR) {
+			t.Fatalf("ReadDir file error = %v, want ENOTDIR", err)
+		}
+	})
 }
 func TestContentAndSize(t *testing.T) {
 	for _, tt := range []struct {
