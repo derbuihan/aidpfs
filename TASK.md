@@ -111,3 +111,5 @@ Oracle AI Data Platform (AIDP) Workbench の workspace をローカルから操�
 - 2026-11-01: REFRESH / UPDATE と条件付き PAR 転送の Go 内部基盤を追加。TLS mock で認証ヘッダー非転送・redirect 拒否・結果不明時の非再試行を確認。実 AIDP・FUSE には未接続、復旧と他 client 競合は未実装。[詳細](docs/20261101_書き込みAPI実測.md)。
 
 - 2026-11-01: Go の PAR metadata・転送を専用合成 FILE で実 AIDP / Object Storage と検証し、条件付き更新・旧 ETag の 412・復元・cleanup を確認。Go POST の署名修正も実施。FUSE 書き込み・同時更新・障害 recovery は未検証。[詳細](docs/20261101_書き込みAPI実測.md)。
+
+- 2026-11-01: 2 client の同時 PAR 条件付き PUT は 2 回とも一方成功・一方 412。PUT 後に別 client が変更してから古い metadata UPDATE を送ると 200 でも別 client の内容が残った。Go PAR GET に ETag の版照合を追加し mock / 実 API で確認。全体の atomicity と recovery は未解決。[詳細](docs/20261101_書き込みAPI実測.md)。

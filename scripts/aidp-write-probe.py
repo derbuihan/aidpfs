@@ -184,6 +184,37 @@ def main():
                 params={'shouldGenerateNewPar': 'true'}, headers=upload_headers)
             if not updated_meta.ok or not updated_meta.json().get('eTag'): raise RuntimeError('cannot re-read test ETag')
             put_etag = updated_meta.json()['eTag']
+            # Another client writes after A's storage PUT but before A closes.
+            refreshed = request('POST', base + '/actions/uploadFileMeta',
+                params={'shouldCreateRecursively': 'false', 'shouldGenerateNewPar': 'true'},
+                headers=upload_headers, json={'action': 'REFRESH'})
+            refresh_url = refreshed.json().get('parUrl') if refreshed.ok else None
+            if not refresh_url: raise RuntimeError('interleaving refresh failed')
+            parsed = urlsplit(refresh_url)
+            if parsed.scheme != 'https' or parsed.hostname != 'objectstorage.' + a.region + '.oraclecloud.com' or parsed.username or parsed.password or parsed.port:
+                raise RuntimeError('unexpected interleaving PAR origin')
+            with requests.Session() as par_client:
+                par_client.trust_env = False
+                a_result = par_client.put(refresh_url, data=b'first-client', headers={'if-match': put_etag}, timeout=20, allow_redirects=False)
+            if a_result.status_code != 200 or not a_result.headers.get('etag'): raise RuntimeError('interleaving first PUT failed')
+            other = request('PUT', contents(upload_path), json={'type': 'file', 'format': 'text', 'content': 'second-client-wins'})
+            if not other.ok: raise RuntimeError('interleaving second PUT failed')
+            stale_close = request('POST', base + '/actions/uploadFileMeta', headers=upload_headers,
+                params={'shouldCreateRecursively': 'false'}, json={'action': 'UPDATE', 'eTag': a_result.headers['etag'], 'size': len(b'first-client')})
+            check = request('GET', contents(upload_path), params={'content': 1})
+            metadata = request('POST', base + '/actions/downloadFileMeta', params={'shouldGenerateNewPar': 'true'}, headers=upload_headers)
+            observed = None
+            if check.ok:
+                model = check.json()
+                observed = base64.b64decode(model['content']) if model.get('format') == 'base64' else model['content'].encode()
+            print('stale metadata close status', stale_close.status_code, 'second client bytes preserved', observed == b'second-client-wins',
+                  'metadata size matches bytes', metadata.ok and observed is not None and metadata.json().get('size') == len(observed), flush=True)
+            reset = request('PUT', base + '/objects/' + quote(upload_path, safe=''),
+                headers={'Content-Type': 'application/octet-stream'}, data=upload_bytes)
+            if reset.status_code not in (200, 201): raise RuntimeError('interleaving restore failed')
+            updated_meta = request('POST', base + '/actions/downloadFileMeta', params={'shouldGenerateNewPar': 'true'}, headers=upload_headers)
+            if not updated_meta.ok or not updated_meta.json().get('eTag'): raise RuntimeError('cannot read restored ETag')
+            put_etag = updated_meta.json()['eTag']
         # Probe duplicate create and a transfer interrupted immediately after CREATE.
         if created.status_code in (200, 201):
             duplicate = request('POST', base + '/actions/uploadFileMeta',

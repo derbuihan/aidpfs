@@ -95,3 +95,26 @@ func TestPARUnknownOutcomeNeverRetried(t *testing.T) {
 		t.Fatalf("calls %d error %v", calls.Load(), e)
 	}
 }
+
+func TestVersionedDownloadRejectsChangedOrMissingETag(t *testing.T) {
+	tag := `"version-two"`
+	s := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if tag != "" {
+			w.Header().Set("ETag", tag)
+		}
+		fmt.Fprint(w, "data")
+	}))
+	defer s.Close()
+	p, _ := newPARTransport(s.URL, s.Client())
+	u, _ := p.validate(s.URL + "/p/test")
+	if data, err := p.downloadVersioned(context.Background(), u, "version-two"); err != nil || string(data) != "data" {
+		t.Fatalf("matching ETag: %v", err)
+	}
+	if data, err := p.downloadVersioned(context.Background(), u, "version-one"); !errors.Is(err, syscall.ESTALE) || data != nil {
+		t.Fatalf("changed ETag: %v", err)
+	}
+	tag = ""
+	if _, err := p.downloadVersioned(context.Background(), u, "version-two"); !errors.Is(err, syscall.ESTALE) {
+		t.Fatalf("missing ETag: %v", err)
+	}
+}

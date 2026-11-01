@@ -40,7 +40,7 @@ func TestLivePARIsolatedFixture(t *testing.T) {
 	if err != nil {
 		t.Fatalf("download metadata: %v", err)
 	}
-	data, err := par.download(ctx, meta.URL)
+	data, err := par.downloadVersioned(ctx, meta.URL, meta.ETag)
 	if err != nil || !bytes.Equal(data, original) || meta.ETag == "" {
 		t.Fatalf("download mismatch: %v", err)
 	}
@@ -78,5 +78,73 @@ func TestLivePARIsolatedFixture(t *testing.T) {
 	data, err = r.ReadFile(ctx, "upload-par.bin")
 	if err != nil || !bytes.Equal(data, original) {
 		t.Fatalf("restore read mismatch: %v", err)
+	}
+	// Two independent clients start with the same storage version.
+	meta, err = r.parMetadataRequest(ctx, par, "upload-par.bin", "DOWNLOAD", "", 0)
+	if err != nil {
+		t.Fatalf("race metadata: %v", err)
+	}
+	first, err := r.parMetadataRequest(ctx, par, "upload-par.bin", "REFRESH", "", 0)
+	if err != nil {
+		t.Fatalf("race refresh 1: %v", err)
+	}
+	second, err := r.parMetadataRequest(ctx, par, "upload-par.bin", "REFRESH", "", 0)
+	if err != nil {
+		t.Fatalf("race refresh 2: %v", err)
+	}
+	type result struct {
+		tag     string
+		err     error
+		content []byte
+	}
+	start := make(chan struct{})
+	results := make(chan result, 2)
+	for i, u := range []parURL{first.URL, second.URL} {
+		payload := []byte{byte('A' + i), 1, 2, 3}
+		go func(u parURL, payload []byte) {
+			<-start
+			tag, e := par.putExisting(ctx, u, meta.ETag, payload)
+			results <- result{tag, e, payload}
+		}(u, payload)
+	}
+	close(start)
+	x, y := <-results, <-results
+	successes, conflicts := 0, 0
+	var winner result
+	for _, result := range []result{x, y} {
+		if result.err == nil {
+			successes++
+			winner = result
+		} else if errors.Is(result.err, syscall.ESTALE) {
+			conflicts++
+		} else {
+			t.Fatalf("concurrent transfer: %v", result.err)
+		}
+	}
+	if successes != 1 || conflicts != 1 {
+		t.Fatalf("concurrent PUT: successes=%d conflicts=%d", successes, conflicts)
+	}
+	t.Log("concurrent conditional PUT: one success, one conflict")
+	if _, err = r.parMetadataRequest(ctx, par, "upload-par.bin", "UPDATE", winner.tag, int64(len(winner.content))); err != nil {
+		t.Fatalf("race close: %v", err)
+	}
+	data, err = r.ReadFile(ctx, "upload-par.bin")
+	if err != nil || !bytes.Equal(data, winner.content) {
+		t.Fatalf("winner read: %v", err)
+	}
+	refresh, err = r.parMetadataRequest(ctx, par, "upload-par.bin", "REFRESH", "", 0)
+	if err != nil {
+		t.Fatalf("race restore refresh: %v", err)
+	}
+	restored, err = par.putExisting(ctx, refresh.URL, winner.tag, original)
+	if err != nil {
+		t.Fatalf("race restore: %v", err)
+	}
+	if _, err = r.parMetadataRequest(ctx, par, "upload-par.bin", "UPDATE", restored, int64(len(original))); err != nil {
+		t.Fatalf("race restore close: %v", err)
+	}
+	data, err = r.ReadFile(ctx, "upload-par.bin")
+	if err != nil || !bytes.Equal(data, original) {
+		t.Fatalf("race restore read: %v", err)
 	}
 }

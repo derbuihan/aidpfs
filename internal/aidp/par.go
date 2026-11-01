@@ -73,36 +73,63 @@ func (e *parHTTPError) Unwrap() error {
 		return syscall.EIO
 	}
 }
+
+// downloadVersioned requires the object response ETag to match the metadata
+// version, avoiding pairing bytes from a newer object with an older version.
+func (p *parTransport) downloadVersioned(ctx context.Context, u parURL, expectedETag string) ([]byte, error) {
+	if expectedETag == "" {
+		return nil, syscall.ESTALE
+	}
+	data, actual, err := p.downloadWithETag(ctx, u)
+	if err != nil {
+		return nil, err
+	}
+	// OCI may quote the HTTP ETag while returning its metadata value unquoted.
+	normalize := func(s string) string {
+		if len(s) >= 2 && s[0] == '"' && s[len(s)-1] == '"' {
+			return s[1 : len(s)-1]
+		}
+		return s
+	}
+	if actual == "" || normalize(actual) != normalize(expectedETag) {
+		return nil, syscall.ESTALE
+	}
+	return data, nil
+}
 func (p *parTransport) download(ctx context.Context, u parURL) ([]byte, error) {
+	data, _, err := p.downloadWithETag(ctx, u)
+	return data, err
+}
+func (p *parTransport) downloadWithETag(ctx context.Context, u parURL) ([]byte, string, error) {
 	if _, e := p.validate(u.raw); e != nil {
-		return nil, e
+		return nil, "", e
 	}
 	req, e := http.NewRequestWithContext(ctx, http.MethodGet, u.raw, nil)
 	if e != nil {
-		return nil, errors.New("invalid PAR request")
+		return nil, "", errors.New("invalid PAR request")
 	}
 	resp, e := p.client.Do(req)
 	if e != nil {
 		if ctx.Err() != nil {
-			return nil, ctx.Err()
+			return nil, "", ctx.Err()
 		}
-		return nil, syscall.EIO
+		return nil, "", syscall.EIO
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return nil, &parHTTPError{status: resp.StatusCode}
+		return nil, "", &parHTTPError{status: resp.StatusCode}
 	}
 	data, e := io.ReadAll(io.LimitReader(resp.Body, maxResponse+1))
 	if e != nil {
 		if ctx.Err() != nil {
-			return nil, ctx.Err()
+			return nil, "", ctx.Err()
 		}
-		return nil, syscall.EIO
+		return nil, "", syscall.EIO
 	}
 	if len(data) > maxResponse {
-		return nil, syscall.EFBIG
+		return nil, "", syscall.EFBIG
 	}
-	return data, nil
+	return data, resp.Header.Get("ETag"), nil
 }
 
 // putExisting uses a nonempty ETag and never retries. A 2xx without a new ETag
