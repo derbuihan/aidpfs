@@ -274,6 +274,29 @@ def main():
                     capture_output=True, text=True, timeout=60)
                 if diagnostic.returncode or 'confirmed=true observation=directory_listed' not in diagnostic.stdout: raise RuntimeError('directory diagnosis failed')
                 print('experimental CLI mkdir, duplicate rejection and intent diagnosis succeeded', flush=True)
+                child_path = created_dir + '/child.bin'
+                with open(os.path.join(write_mount_dir, 'cli-dir', 'child.bin'), 'xb', buffering=0) as child_file:
+                    child_file.write(b'nested-synthetic')
+                    os.fsync(child_file.fileno())
+                child_response = request('GET', contents(child_path), params={'content': 1})
+                if not child_response.ok: raise RuntimeError('nested file read failed')
+                model = child_response.json()
+                child_data = base64.b64decode(model['content']) if model.get('format') == 'base64' else model['content'].encode()
+                if child_data != b'nested-synthetic': raise RuntimeError('nested file mismatch')
+                if {item.get('path') for item in listing(created_dir)} != {child_path}: raise RuntimeError('unexpected nested directory contents')
+                child_intents = []
+                for name in os.listdir(recovery_dir):
+                    if name.startswith('create-') and name.endswith('.json'):
+                        with open(os.path.join(recovery_dir, name)) as f: item = json.load(f)
+                        if item.get('remote_path') == child_path and item.get('kind') == 'FILE': child_intents.append(item)
+                if len(child_intents) != 1: raise RuntimeError('nested file intent missing')
+                removed = request('DELETE', contents(child_path))
+                if removed.status_code != 204 or listing(created_dir): raise RuntimeError('nested child cleanup failed')
+                diagnostic = subprocess.run([a.write_mount_binary, 'recovery', 'inspect-create', '--dir', recovery_dir,
+                    '--id', child_intents[0]['id'], '--region', a.region, '--profile', a.profile, '--endpoint', a.endpoint],
+                    capture_output=True, text=True, timeout=60)
+                if diagnostic.returncode or 'confirmed=true observation=not_listed' not in diagnostic.stdout: raise RuntimeError('removed child diagnosis failed')
+                print('experimental CLI nested create, write, read, cleanup and not_listed diagnosis succeeded', flush=True)
                 with open(os.path.join(write_mount_dir, 'upload-par.bin'), 'r+b', buffering=0) as handle:
                     handle.seek(0)
                     handle.write(b'Z')

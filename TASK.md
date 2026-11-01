@@ -87,6 +87,8 @@ Oracle AI Data Platform (AIDP) Workbench の workspace をローカルから操�
 
 ## 完了
 
+- 2026-11-02: 実 AIDP の専用領域で CLI mkdir の下に FILE を create・write・fsync し、REST 内容と親一覧を確認。子を個別削除後、create intent の `not_listed` と親・専用領域 cleanup を確認。ネスト 1 階層・単一 client の限定試験。[詳細](docs/20261101_復旧データ基盤.md)。
+
 - 2026-11-02: 試験的 FUSE に非上書き mkdir と FOLDER intent を追加。実 AIDP の専用領域で CLI mkdir、重複拒否、親一覧、`inspect-create` の `directory_listed`、cleanup を確認。ネスト操作・作成中断・rmdir・並行操作は未検証。[詳細](docs/20261101_復旧データ基盤.md)。
 
 - 2026-11-02: `recovery inspect-create` で create intent の対象を親一覧と照合する機能を追加。実 AIDP の専用 FILE で `file_listed` と再送なしを確認し cleanup 済み。未掲載や他種別の実 API 確認・作成成否の確定・自動復旧は未完了。[詳細](docs/20261101_復旧データ基盤.md)。
