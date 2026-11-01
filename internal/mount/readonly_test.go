@@ -9,14 +9,16 @@ import (
 	"sync"
 	"syscall"
 	"testing"
+	"time"
 
 	"aidpfs/internal/backend"
 )
 
 type fake struct {
-	mu      sync.Mutex
-	data    []byte
-	deleted bool
+	mu       sync.Mutex
+	data     []byte
+	deleted  bool
+	modified time.Time
 }
 
 func (f *fake) Stat(_ context.Context, p string) (backend.Metadata, error) {
@@ -29,7 +31,7 @@ func (f *fake) Stat(_ context.Context, p string) (backend.Metadata, error) {
 		if f.deleted {
 			return backend.Metadata{}, syscall.ENOENT
 		}
-		return backend.Metadata{Name: "file", Kind: backend.File, Size: int64(len(f.data))}, nil
+		return backend.Metadata{Name: "file", Kind: backend.File, Size: int64(len(f.data)), Modified: f.modified}, nil
 	default:
 		return backend.Metadata{}, syscall.ENOENT
 	}
@@ -56,7 +58,8 @@ func TestSnapshotAndReadonlyMount(t *testing.T) {
 		t.Skip("FUSE device unavailable")
 	}
 	d := t.TempDir()
-	f := &fake{data: []byte("abcdef")}
+	modified := time.Unix(1760000000, 0)
+	f := &fake{data: []byte("abcdef"), modified: modified}
 	srv, err := Mount(context.Background(), d, f)
 	if err != nil {
 		t.Skipf("FUSE mount unavailable: %v", err)
@@ -72,6 +75,10 @@ func TestSnapshotAndReadonlyMount(t *testing.T) {
 		t.Fatalf("statfs error = %v, want EOPNOTSUPP", err)
 	}
 	file := filepath.Join(d, "file")
+	rootInfo, err := os.Stat(d)
+	if err != nil || rootInfo.Mode().Perm() != 0500 {
+		t.Fatalf("directory mode = %v, error = %v", rootInfo, err)
+	}
 	h, err := os.Open(file)
 	if err != nil {
 		t.Fatal(err)
@@ -96,11 +103,27 @@ func TestSnapshotAndReadonlyMount(t *testing.T) {
 	if err != nil || st.Size() != int64(len(fresh)) {
 		t.Fatalf("stat %v %v", st, err)
 	}
+	if st.Mode().Perm() != 0400 || !st.ModTime().Equal(modified) {
+		t.Fatalf("file mode/time = %v/%v", st.Mode().Perm(), st.ModTime())
+	}
+	stat, ok := st.Sys().(*syscall.Stat_t)
+	if !ok || stat.Uid != uint32(os.Getuid()) || stat.Gid != uint32(os.Getgid()) {
+		t.Fatalf("file owner = %#v", st.Sys())
+	}
 	if _, err = os.OpenFile(file, os.O_WRONLY, 0); !errors.Is(err, syscall.EROFS) {
 		t.Errorf("existing write: %v", err)
 	}
 	if _, err = os.Create(filepath.Join(d, "new")); !errors.Is(err, syscall.EROFS) {
 		t.Errorf("create: %v", err)
+	}
+	if err = os.Chmod(file, 0600); !errors.Is(err, syscall.EROFS) {
+		t.Errorf("chmod: %v", err)
+	}
+	if err = os.Chown(file, os.Getuid(), os.Getgid()); !errors.Is(err, syscall.EROFS) {
+		t.Errorf("chown: %v", err)
+	}
+	if err = os.Chtimes(file, modified, modified); !errors.Is(err, syscall.EROFS) {
+		t.Errorf("utimens: %v", err)
 	}
 	f.mu.Lock()
 	f.deleted = true
