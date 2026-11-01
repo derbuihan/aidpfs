@@ -28,7 +28,6 @@ Oracle AI Data Platform (AIDP) Workbench の workspace をローカルから操�
 
 ### 4. 書き込み API と仕様の実測
 
-- [ ] **使い捨て領域**: 専用フォルダと安全な cleanup を用意し、成功・失敗・中断後にテストデータだけを除去できることを確認する。
 - [ ] **操作対応**: WorkspaceObject と notebook contents/PAR それぞれの create、update、mkdir、rename/move、上書き、delete を通常ファイルと notebook で実測する。Notebook POST は無題作成と説明されるため、指定名での create に必要な手順を確認する。
 - [ ] **競合と整合性**: GET と更新時の ETag、`if-match`、`compositeEtag` の互換性、複数 client の同時更新、外部変更、曖昧な timeout 後の状態を確認する。各操作の atomicity と非空ディレクトリの削除挙動を記録する。
 - [ ] **転送**: upload PAR の取得から転送・完了までの手順、サイズ上限、期限、失敗後の残存物、上書き時の条件付き保護と再試行を確認する。
@@ -37,7 +36,6 @@ Oracle AI Data Platform (AIDP) Workbench の workspace をローカルから操�
 
 ### 5. 書き込み FUSE
 
-- [ ] **基本操作**: `create`/`write`/`truncate`、`mkdir`、`unlink`/`rmdir`、`rename` を契約に沿って実装する。サイズ・部分書き込み・空ファイル・上書き・非空ディレクトリと errno をテストする。
 - [ ] **rename**: 既存先の置換、`RENAME_NOREPLACE`/`RENAME_EXCHANGE`、異なるディレクトリ間、open/dirty source・destination、inode の寿命を検証する。atomicity を保証できない場合は非対応または制限を明示し、非原子的な処理を原子的成功として返さない。
 - [ ] **保存と復旧**: dirty buffer と同一ファイルへの並列操作を設計し、flush の複数回/未呼出、fsync、release、shutdown、通信断・競合時の保持と復旧をテストする。release のエラーは close に返らないことを前提に、利用者が失敗を検出・回復できる手段を実装する。`fsync` に安易に `ENOSYS` を返さない。
 - [ ] **キャッシュ整合**: 書き込み・rename・削除後の metadata/content/kernel cache、dirty 中の `stat`、他 client の変更を検証する。失敗時に旧データや dirty データを誤って破棄しない。
@@ -73,6 +71,10 @@ Oracle AI Data Platform (AIDP) Workbench の workspace をローカルから操�
 - 以前の隔離された Codex 実行環境では `/dev/fuse` が見えなかった。2026-11-01 の今回の実行環境ではデバイスを読み書き可能で、読み取り専用 mount と unmount を確認済み。
 
 ## 完了
+
+- 2026-11-02: `scripts/aidp-write-probe.py` が `/Workspace/Shared` のランダム UUID root のみを作成し、既知の合成 child だけを cleanup することを実 AIDP で検証。正常完了後は root DELETE 204 と親一覧からの消滅を確認。途中の曖昧結果では自動削除を止め、journal と候補を残す。実 AIDP PAR/FUSE の process-kill recovery 試験を含む一連の suite 後も root cleanup 済み。[詳細](docs/20261101_書き込みAPI実測.md)、[復旧](docs/20261101_復旧データ基盤.md)。
+
+- 2026-11-02: experimental FUSE の FILE `create`/`write`/`truncate`/`fsync`/`mkdir` と既存 FILE 更新を fake と実 AIDP 専用 mount で検証。部分 write・空 FILE・duplicate create/mkdir の errno と内容、非空 directory delete の remote 危険性を確認し、`unlink`/`rmdir`/`rename` は `EOPNOTSUPP` として拒否する契約を README に明記。rename の flag/置換・同時操作の追加条件は別タスクに残す。[詳細](docs/20261101_復旧データ基盤.md)、[書き込み API 実測](docs/20261101_書き込みAPI実測.md)。
 
 - 2026-11-02: README に setup/authentication、use、limitations、validation、recovery を整理し、GPL-3.0 と imported Go modules のライセンスを [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) に記載。Linux amd64 binary build、gofmt、vet、race suite は現 HEAD で成功。Ubuntu GitHub Actions run 41301673469 も成功（run commit `ae1554f`、現 HEAD より前）。`docs/` は gitignore で公開対象外。[CI](.github/workflows/ci.yml)。
 
