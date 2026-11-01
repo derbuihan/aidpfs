@@ -1,0 +1,190 @@
+package mount
+
+import (
+	"bytes"
+	"context"
+	"errors"
+	"os"
+	"path/filepath"
+	"sync"
+	"syscall"
+	"testing"
+
+	"aidpfs/internal/recovery"
+	"aidpfs/internal/writeback"
+)
+
+type mountRemote struct {
+	mu   sync.Mutex
+	tag  string
+	data []byte
+	fail bool
+	puts int
+}
+
+func (r *mountRemote) Refresh(context.Context, writeback.Target) (writeback.Upload, error) {
+	return r, nil
+}
+func (r *mountRemote) Put(_ context.Context, tag string, data []byte) (string, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.puts++
+	if r.fail {
+		return "", syscall.EIO
+	}
+	if tag != r.tag {
+		return "", syscall.ESTALE
+	}
+	r.data = append([]byte(nil), data...)
+	r.tag = "next"
+	return r.tag, nil
+}
+func (r *mountRemote) Complete(context.Context, writeback.Target, string, int64) error { return nil }
+func (r *mountRemote) Verify(_ context.Context, _ writeback.Target, tag string, data []byte) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if tag != r.tag || !bytes.Equal(data, r.data) {
+		return syscall.ESTALE
+	}
+	return nil
+}
+func testExperimentalMount(t *testing.T, remote *mountRemote) (string, *recovery.Store) {
+	t.Helper()
+	if _, e := os.Stat("/dev/fuse"); e != nil {
+		t.Skip("FUSE unavailable")
+	}
+	d := t.TempDir()
+	cache := t.TempDir()
+	if e := os.Chmod(cache, 0700); e != nil {
+		t.Fatal(e)
+	}
+	store, e := recovery.Open(cache)
+	if e != nil {
+		t.Fatal(e)
+	}
+	reader := &fake{data: []byte("abcd")}
+	server, e := mountExperimental(context.Background(), d, reader, func(_ context.Context, rel string) (*writeback.Buffer, error) {
+		if rel != "file" {
+			return nil, syscall.ENOENT
+		}
+		return writeback.NewBuffer(writeback.Target{PlatformID: "p", WorkspaceKey: "w", RemotePath: "/Workspace/file"}, "old", []byte("abcd"), store, remote)
+	})
+	if e != nil {
+		t.Skipf("FUSE mount unavailable: %v", e)
+	}
+	t.Cleanup(func() {
+		if e := server.Unmount(); e != nil {
+			t.Errorf("unmount: %v", e)
+		}
+		server.Wait()
+	})
+	return d, store
+}
+func TestExperimentalMountWriteSyncAndTruncate(t *testing.T) {
+	remote := &mountRemote{tag: "old"}
+	d, store := testExperimentalMount(t, remote)
+	name := filepath.Join(d, "file")
+	f, e := os.OpenFile(name, os.O_RDWR, 0)
+	if e != nil {
+		t.Fatal(e)
+	}
+	if n, e := f.WriteAt([]byte("XY"), 2); e != nil || n != 2 {
+		t.Fatalf("write %d %v", n, e)
+	}
+	if e = f.Truncate(7); e != nil {
+		t.Fatal(e)
+	}
+	st, e := f.Stat()
+	if e != nil || st.Size() != 7 {
+		t.Fatalf("stat %v %v", st, e)
+	}
+	if e = f.Sync(); e != nil {
+		t.Fatal(e)
+	}
+	remote.mu.Lock()
+	got := append([]byte(nil), remote.data...)
+	count := remote.puts
+	remote.mu.Unlock()
+	if !bytes.Equal(got, []byte{'a', 'b', 'X', 'Y', 0, 0, 0}) || count != 1 {
+		t.Fatal("sync bytes or count incorrect")
+	}
+	if e = f.Close(); e != nil {
+		t.Fatal(e)
+	}
+	remote.mu.Lock()
+	count = remote.puts
+	remote.mu.Unlock()
+	if count != 1 {
+		t.Fatal("close re-sent clean state")
+	}
+	entries, e := store.List()
+	if e != nil || len(entries) != 2 {
+		t.Fatalf("journal entries %d %v", len(entries), e)
+	}
+}
+func TestExperimentalMountFsyncFailureRetainsJournal(t *testing.T) {
+	remote := &mountRemote{tag: "old", fail: true}
+	d, store := testExperimentalMount(t, remote)
+	f, e := os.OpenFile(filepath.Join(d, "file"), os.O_RDWR, 0)
+	if e != nil {
+		t.Fatal(e)
+	}
+	if _, e = f.WriteAt([]byte("data"), 0); e != nil {
+		t.Fatal(e)
+	}
+	if e = f.Sync(); !errors.Is(e, syscall.EIO) {
+		t.Fatalf("fsync error %v", e)
+	}
+	remote.mu.Lock()
+	count := remote.puts
+	remote.mu.Unlock()
+	if e = f.Sync(); !errors.Is(e, syscall.EIO) {
+		t.Fatalf("second fsync %v", e)
+	}
+	remote.mu.Lock()
+	if remote.puts != count {
+		t.Error("automatically retried")
+	}
+	remote.mu.Unlock()
+	if e = f.Close(); !errors.Is(e, syscall.EIO) {
+		t.Errorf("close did not report failure: %v", e)
+	}
+	entries, e := store.List()
+	if e != nil || len(entries) != 1 || entries[0].Invalid || entries[0].Stage != recovery.PutStarted {
+		t.Fatalf("recovery entries %v %v", entries, e)
+	}
+	_, data, e := store.Load(entries[0].ID)
+	if e != nil || !bytes.Equal(data, []byte("data")) {
+		t.Fatal("recovery content missing")
+	}
+}
+
+func TestExperimentalMountTruncateOnOpenAndSharedHandles(t *testing.T) {
+	remote := &mountRemote{tag: "old"}
+	d, _ := testExperimentalMount(t, remote)
+	name := filepath.Join(d, "file")
+	first, e := os.OpenFile(name, os.O_RDWR, 0)
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer first.Close()
+	second, e := os.OpenFile(name, os.O_WRONLY|os.O_TRUNC, 0)
+	if e != nil {
+		t.Fatal(e)
+	}
+	if _, e = second.Write([]byte("fresh")); e != nil {
+		t.Fatal(e)
+	}
+	buf := make([]byte, 5)
+	if n, e := first.ReadAt(buf, 0); e != nil || n != 5 || string(buf) != "fresh" {
+		t.Fatalf("shared read n=%d err=%v", n, e)
+	}
+	if e = second.Close(); e != nil {
+		t.Fatal(e)
+	}
+	remote.mu.Lock()
+	defer remote.mu.Unlock()
+	if !bytes.Equal(remote.data, []byte("fresh")) {
+		t.Fatal("truncate-on-open save mismatch")
+	}
+}
