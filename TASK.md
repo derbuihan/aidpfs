@@ -37,7 +37,6 @@ Oracle AI Data Platform (AIDP) Workbench の workspace をローカルから操�
 
 - [ ] **rename**: 既存先の置換、`RENAME_NOREPLACE`/`RENAME_EXCHANGE`、異なるディレクトリ間、open/dirty source・destination、inode の寿命を検証する。atomicity を保証できない場合は非対応または制限を明示し、非原子的な処理を原子的成功として返さない。
 - [ ] **保存と復旧**: dirty buffer と同一ファイルへの並列操作を設計し、flush の複数回/未呼出、fsync、release、shutdown、通信断・競合時の保持と復旧をテストする。release のエラーは close に返らないことを前提に、利用者が失敗を検出・回復できる手段を実装する。`fsync` に安易に `ENOSYS` を返さない。
-- [ ] **キャッシュ整合**: 書き込み・rename・削除後の metadata/content/kernel cache、dirty 中の `stat`、他 client の変更を検証する。失敗時に旧データや dirty データを誤って破棄しない。
 - [ ] **互換操作**: `chmod`/`chown`、時刻変更、`statfs`、open 後 unlink、forget、locks、非対応 flags の動作を定義し、成功/no-op/errno を明示する。分散 lock をサポートすると未検証のまま主張しない。
 - [ ] **容量と障害**: 大きなファイルのメモリ・一時ファイル容量、転送中断、プロセス終了、ローカルディスク不足、再起動後の recovery を検証する。
 
@@ -76,6 +75,8 @@ Oracle AI Data Platform (AIDP) Workbench の workspace をローカルから操�
 - 2026-11-02: experimental FUSE の FILE `create`/`write`/`truncate`/`fsync`/`mkdir` と既存 FILE 更新を fake と実 AIDP 専用 mount で検証。部分 write・空 FILE・duplicate create/mkdir の errno と内容、非空 directory delete の remote 危険性を確認し、`unlink`/`rmdir`/`rename` は `EOPNOTSUPP` として拒否する契約を README に明記。rename の flag/置換・同時操作の追加条件は別タスクに残す。[詳細](docs/20261101_復旧データ基盤.md)、[書き込み API 実測](docs/20261101_書き込みAPI実測.md)。
 
 - 2026-11-02: experimental write mount の operation contract を README に整理。create/mkdir の非上書きと intent、FILE-only edit、`fsync`/flush 成功の意味、close が保存しないこと、競合・結果不明時の errno/journal、metadata・delete・rename・statfs 非対応を明示し、fake と実 AIDP fixture の結果へ紐付けた。[README](README.md)、[実測](docs/20261101_書き込みAPI実測.md)、[復旧基盤](docs/20261101_復旧データ基盤.md)。
+
+- 2026-11-02: experimental mount の dirty buffer size を handle/path getattr に反映し、direct I/O で kernel content cache を使わず、clean release 後だけ buffer を破棄、dirty/失敗時は journal を保持することを fake 実 mount で検証。実 AIDP の外部 client 更新では古い版の fsync を `ESTALE` にし dirty data を保持。delete/rename は `EOPNOTSUPP` のため成功後 cache invalidation 経路は提供しない。[復旧・cache 実測](docs/20261101_復旧データ基盤.md)、[書き込み契約](README.md)。
 
 - 2026-11-02: README に setup/authentication、use、limitations、validation、recovery を整理し、GPL-3.0 と imported Go modules のライセンスを [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) に記載。Linux amd64 binary build、gofmt、vet、race suite は現 HEAD で成功。Ubuntu GitHub Actions run 41301673469 も成功（run commit `ae1554f`、現 HEAD より前）。`docs/` は gitignore で公開対象外。[CI](.github/workflows/ci.yml)。
 
