@@ -84,7 +84,7 @@ Oracle AI Data Platform (AIDP) Workbench の workspace をローカルから操�
 
 ### 9. Notebook 書き込み
 
-- [x] **保存形式とWorkbench競合**: 2026-11-02、rich synthetic notebookのcontents GETとexport ipynb (HTTP 200) を構造比較。source表現、cell metadata/outputsの正規化があり、PAR JSONもcontentsと一致せずlossless roundtripは未成立。さらにWorkbench周期autosaveが別client REST PUTを上書きし、wrong if-matchも拒否されなかったためversion conflict controlなしと判定。[契約](docs/20261102_AIDP書込みAPI契約.md)。
+- [x] **保存形式とWorkbench競合**: 2026-11-02、rich synthetic notebookのcontents GETとexport ipynb (HTTP 200) を構造比較。公開schemaはexport `content` を文字列とするがtenant応答はJSON objectで、contents GETとも一致せず、source/cell metadata/outputsの正規化とPAR JSONの差がありlossless roundtripは未成立。さらにWorkbench周期autosaveが別client REST PUTを上書きし、wrong if-matchも拒否されなかったためversion conflict controlなしと判定。[契約](docs/20261102_AIDP書込みAPI契約.md)。
 - [x] **Notebook write support**: 2026-11-02、競合検出とlossless保存/回復契約を確立できないことを実Notebook UI・REST・API比較で確認。安全なNotebook write-openは実装せずread-onlyを維持し、READMEとFUSE動作に明記する判断を完了。
 
 ### 10. VS Code 実行環境と E2E
