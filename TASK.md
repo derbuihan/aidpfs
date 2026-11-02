@@ -82,16 +82,31 @@ Oracle AI Data Platform (AIDP) Workbench の workspace をローカルから操�
 - [x] **FUSE/POSIX操作**: 2026-11-02、FILE create/open/write/truncate/append/fsync/flush/closeとmkdirを契約に合わせ、VS Codeのopen/search/edit/save/reopen・dirty buffer・外部更新・rename/delete拒否を実AIDP FUSEで確認。rename/unlink/rmdirは安全なAPI保証がないため拒否を維持。
 - [x] **experimental表記の解除判定**: 2026-11-02、mock/race/障害、実AIDP API・PAR、実FUSE、複数handle/外部更新、独立GET、journal recovery、cleanup、VS Code E2Eが成功。CLIを `--write` に変更しWARNINGを解除。README/TASKにFILE/FOLDER対応範囲、Notebook/rename/delete未対応、単一writer・64 MiB・unknown outcomeの限界を明記。
 
-### 9. Notebook 書き込み
+### 9. Notebook 書き込みの初回調査（完了、必須機能として再開）
 
 - [x] **保存形式とWorkbench競合**: 2026-11-02、rich synthetic notebookのcontents GETとexport ipynb (HTTP 200) を構造比較。Oracle公開資料はexport `content` をschema上はobject・説明文ではipynb stringと記載。tenant応答はJSON objectでcontents GETとも構造不一致。source/cell metadata/outputsの正規化とPAR JSONとの差がありlossless roundtripは未成立。さらにWorkbench周期autosaveが別client REST PUTを上書きし、wrong if-matchも拒否されなかったためversion conflict controlなしと判定。[契約](docs/20261102_AIDP書込みAPI契約.md)。
-- [x] **Notebook write support**: 2026-11-02、競合検出とlossless保存/回復契約を確立できないことを実Notebook UI・REST・API比較で確認。安全なNotebook write-openは実装せずread-onlyを維持し、READMEとFUSE動作に明記する判断を完了。
+- [x] **初回実装判断**: 2026-11-02、contents PUTの誤`if-match`受理、Workbench autosave競合、rich payloadの正規化を確認し、一旦read-onlyとした。ユーザー要件によりNotebook書き込みは必須機能として再開し、以下の新タスクで実現可能な安全境界を確定する。[再調査](docs/20261102_Notebook書き込み再調査.md)。
 
 ### 10. VS Code 実行環境と E2E
 
 - [x] **環境の実現可能性**: 2026-11-02、ホストでDocker 29.9.1 daemon・Compose 5.6.0、読み書き可能な`/dev/fuse`、VS Code CLI、OCI configと読取り可能な署名鍵を確認。`wsfs` は `Dockerfile.vscode-test` のNode 20/Xvfb/VS Code test runnerと、ComposeのFUSE device・SYS_ADMIN・privileged containerでE2Eを動かす。AIDP環境もDockerベースで整備可能だが、aidpfsのGo 1.26に合わせたimage、OCI configのread-only mount、AIDP用runnerが必要。wsfsのrunnerは`.env`のDatabricks credentialsを必須とするため、そのままは使わない。
 - [x] **AIDP用runner整備**: 2026-11-02、Go 1.26/Node 20/Xvfb/VS Code test runner/FUSE付きDocker Composeを追加。OCI config directoryをread-onlyでbind mountし、API keyは環境変数や成果物に置かない。wsfsのrunner方式を参照した独立構成。[runner](scripts/test-vscode-docker.sh)、[image](Dockerfile.vscode-test)、[compose](docker-compose.vscode.yml)。
 - [x] **VS Code E2E**: 2026-11-02、実AIDP UUID synthetic root上のFILEでVS Code open/read/search/edit/save/reopen、dirty buffer保持、外部API更新とreopen、rename/delete拒否を検証。FUSE `fsync`/API GETで保存結果を照合し、対象fixtureを削除後にrootが親一覧から消えたことを確認。Notebookは別途read-onlyと決定。Docker runnerのrace suite/ビルドと実AIDP PAR/FUSE live suiteも成功。
+
+### 11. 必須: Notebook 保存経路と競合境界を確定
+
+- [x] **API資料と追加実測**: 2026-11-02、contents GET/PUTの`hash=1`・誤`if-match`、2-chunk Notebook PUT、Notebook `downloadFileMeta` / `uploadFileMeta(REFRESH/UPDATE)`、PAR conditional PUTを調査。GET hash/ETagなし、誤if-match PUTは200、chunked更新は通常PUTと同じ正規化後NotebookNodeを返し、Notebook PARの古い競合writerは412となり先行内容を保持した。[詳細](docs/20261102_Notebook書き込み再調査.md)。
+- [ ] **表現のlossless基準**: contents GET、export ipynb、Notebook download PAR raw bytes、Workbenchで保存・再openした結果を、code/markdown source、cell順序とID、metadata、outputs、attachments、widgets、未知fieldごとに比較する。書込み用の正準表現と意味的同一性の判定基準を決める。内容・PAR URLはログに残さない。
+- [ ] **chunk protocolの境界**: Notebook chunked create/updateの実request構造、chunk終端・順序・欠落・重複・SHA不一致・中断後再開・サイズ上限をsynthetic Notebookで検証し、POST/PUTどちらが新規作成・上書きに適するか決める。通常PUTで作成競合時の挙動も確認する。
+- [ ] **WorkbenchとPARの競合**: NotebookをWorkbenchで未保存のまま開き、別clientのNotebook PAR conditional save後に周期autosaveする試験を行い、API GET・Workbench表示・PAR versionの三者を照合する。逆順、同時PAR writer、同一・別principalの可能な範囲を試し、UIがCAS/lockを尊重するか結論を記録する。権限変更や別principal作成はこの試験の前提にしない。
+- [ ] **保存契約**: 実測に基づき、単一writer条件、Workbench等の非協調writerによる残存競合、fsync成功条件、競合errno、未知結果journal/manual recovery、Notebook作成・rename・deleteの対応範囲を定義する。Notebook書込み必須要件を満たす最小機能と、保証できない挙動をREADME/TASKに記載する。
+
+### 12. 必須: Notebook 書き込みを実装して実環境で受け入れる
+
+- [ ] **Notebook backend**: 保存契約で選んだrepresentationを基に、storage versionを読取り時から保持するNotebook writerを実装する。選択された経路がPARなら `downloadFileMeta` → upload PAR refresh → ETag条件付き転送 → `UPDATE` → 独立readbackを行い、contents PUTの`if-match`をCASとして扱わない。chunked経路を使う場合は順序・hash・未完了uploadの回復を実装する。
+- [ ] **FUSEと復旧**: `--write`でNotebookのread/write/truncate/append/fsyncを明示的に有効化し、失敗・412・Workbench競合・結果不明でdirty内容とbase versionをjournalに保持する。Notebook write-openとFILE writeの境界、作成可否、close/fsyncのerrnoをmock/raceで検証する。安全な削除/rename根拠がなければ引き続き拒否する。
+- [ ] **実API/UI/Editor E2E**: 合成Notebookで空・rich・output付き・大きいchunked payloadを保存し、contents GET、export、Workbench UI再open、VS Code open/edit/save/reopenで受け入れ基準を照合する。2 client競合、Workbench autosave、412、timeout/process stop後のjournal保持と復旧を実施し、専用root cleanupを確認する。
+- [ ] **公開範囲の更新**: すべての受け入れ条件が満たされた後、READMEのNotebook read-only記述、CLI help、TASKのexperimental/write scopeを更新し、利用者向けに競合保証と未保証のwriterを明示する。
 
 ## 完了
 
