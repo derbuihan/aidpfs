@@ -35,15 +35,17 @@ def main():
     p.add_argument('--endpoint', default='https://aidp.ap-osaka-1.oci.oraclecloud.com')
     p.add_argument('--journal', required=True, help='new private recovery journal path')
     p.add_argument('--mount-binary', help='optional aidpfs executable for live mount checks')
-    p.add_argument('--write-mount-binary', help='optional aidpfs executable for isolated experimental write checks')
+    p.add_argument('--write-mount-binary', help='optional aidpfs executable for isolated FILE write checks')
     p.add_argument('--vim-check', action='store_true', help='test configured Vim on an isolated synthetic file (requires --write-mount-binary)')
     p.add_argument('--git-check', action='store_true', help='test Git with a local separate repository and rg (requires --write-mount-binary)')
+    p.add_argument('--vscode-check', action='store_true', help='test VS Code against an isolated synthetic FILE (requires --write-mount-binary)')
     p.add_argument('--region', default='ap-osaka-1')
     p.add_argument('--go-par-test', action='store_true', help='run Go live PAR integration against this run only')
     p.add_argument('--rename-race', action='store_true', help='run potentially ambiguous concurrent rename experiment')
     a = p.parse_args()
     if a.vim_check and not a.write_mount_binary: p.error('--vim-check requires --write-mount-binary')
     if a.git_check and not a.write_mount_binary: p.error('--git-check requires --write-mount-binary')
+    if a.vscode_check and not a.write_mount_binary: p.error('--vscode-check requires --write-mount-binary')
     if not a.endpoint.startswith('https://') or '/' in a.endpoint[8:]:
         p.error('endpoint must be an HTTPS origin')
     token = uuid.uuid4().hex
@@ -55,7 +57,7 @@ def main():
                    'endpoint': a.endpoint, 'profile': a.profile}, f)
         f.flush()
         os.fsync(f.fileno())
-    c = oci.config.from_file(profile_name=a.profile)
+    c = oci.config.from_file(file_location=os.environ.get('OCI_CONFIG_FILE') or None, profile_name=a.profile)
     signer = oci.signer.Signer(tenancy=c['tenancy'], user=c['user'], fingerprint=c['fingerprint'],
                                private_key_file_location=c['key_file'], pass_phrase=c.get('pass_phrase'))
     base = a.endpoint + '/20260430/aiDataPlatforms/' + quote(a.platform_id, safe='') + '/workspaces/' + quote(a.workspace_key, safe='')
@@ -101,6 +103,38 @@ def main():
             raise RuntimeError('probe root creation failed or ambiguous; inspect journal')
         created_root = True
         print('root created; empty listing:', len(listing(root)) == 0, flush=True)
+        if a.vscode_check:
+            vscode_path = root + '/vscode-e2e.txt'
+            response = request('POST', base + '/objects', headers={'path': vscode_path, 'type': 'FILE',
+                'is-overwrite': 'false', 'Content-Type': 'application/octet-stream'}, data=b'aidpfs-vscode-seed\n')
+            if response.status_code not in (200, 201): raise RuntimeError('VS Code fixture creation failed or ambiguous')
+            owned.add(vscode_path)
+            external_path = root + '/vscode-external.txt'
+            response = request('POST', base + '/objects', headers={'path': external_path, 'type': 'FILE',
+                'is-overwrite': 'false', 'Content-Type': 'application/octet-stream'}, data=b'aidpfs-vscode-external-seed\n')
+            if response.status_code not in (200, 201): raise RuntimeError('VS Code external-update fixture creation failed or ambiguous')
+            owned.add(external_path)
+            print('VS Code synthetic FILE fixtures created', flush=True)
+        retry_path = root + '/retry-token-create.bin'
+        retry_headers = {'path': retry_path, 'type': 'FILE', 'is-overwrite': 'false',
+                         'Content-Type': 'application/octet-stream', 'opc-retry-token': uuid.uuid4().hex}
+        retry_first = request('POST', base + '/objects', headers=retry_headers, data=b'retry-token-synthetic')
+        if retry_first.status_code in (200, 201):
+            owned.add(retry_path)
+            retry_second = request('POST', base + '/objects', headers=retry_headers, data=b'retry-token-synthetic')
+            retry_matches = [item for item in listing(root) if item.get('path') == retry_path]
+            retry_read = request('GET', contents(retry_path), params={'content': 1})
+            retry_preserved = False
+            if retry_read.ok:
+                model = retry_read.json()
+                value = base64.b64decode(model['content']) if model.get('format') == 'base64' else model.get('content', '').encode()
+                retry_preserved = value == b'retry-token-synthetic'
+            print('same retry token second status', retry_second.status_code,
+                  'single object', len(retry_matches) == 1, 'payload preserved', retry_preserved, flush=True)
+            if len(retry_matches) != 1 or not retry_preserved:
+                raise RuntimeError('retry-token duplicate request changed fixture or created unexpected objects')
+        else:
+            print('retry-token fixture creation status', retry_first.status_code, flush=True)
         # Determine whether contents DELETE rejects a non-empty directory.
         # Both directory and child are generated under the isolated root.
         nested = root + '/nonempty-test'
@@ -166,7 +200,7 @@ def main():
             if any(item.get('path') == race_dest for item in listing(root)): raise RuntimeError('rename destination unexpectedly exists')
             rename_race_pending = True
             def race_rename(src):
-                local_config = oci.config.from_file(profile_name=a.profile)
+                local_config = oci.config.from_file(file_location=os.environ.get('OCI_CONFIG_FILE') or None, profile_name=a.profile)
                 local_signer = oci.signer.Signer(tenancy=local_config['tenancy'], user=local_config['user'], fingerprint=local_config['fingerprint'], private_key_file_location=local_config['key_file'], pass_phrase=local_config.get('pass_phrase'))
                 with requests.Session() as local_session:
                     local_session.auth = local_signer
@@ -275,7 +309,7 @@ def main():
         else:
             print('upload PAR create did not succeed; unknown objects stop cleanup', flush=True)
         if a.write_mount_binary:
-            if not put_etag: raise RuntimeError('experimental mount requires a completed synthetic upload')
+            if not put_etag: raise RuntimeError('write-enabled mount requires a completed synthetic upload')
             if a.vim_check:
                 vim_path = root + '/vim-fixture.txt'
                 vim_create = request('POST', base + '/objects', headers={'path': vim_path, 'type': 'FILE', 'is-overwrite': 'false', 'Content-Type': 'application/octet-stream'}, data=b'vim-synthetic-original\n')
@@ -285,14 +319,37 @@ def main():
             recovery_dir = tempfile.mkdtemp(prefix='aidpfs-cli-recovery-')
             cli = subprocess.Popen([a.write_mount_binary, '--profile', a.profile, '--region', a.region,
                 '--endpoint', a.endpoint, '--platform-id', a.platform_id, '--workspace-key', a.workspace_key,
-                '--remote-path', root, '--mount-point', write_mount_dir, '--experimental-write', '--recovery-dir', recovery_dir],
+                '--remote-path', root, '--mount-point', write_mount_dir, '--write', '--recovery-dir', recovery_dir],
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             cli_success = False
             try:
                 for _ in range(200):
                     if os.path.ismount(write_mount_dir) or cli.poll() is not None: break
                     time.sleep(0.1)
-                if not os.path.ismount(write_mount_dir): raise RuntimeError('experimental CLI mount failed')
+                if not os.path.ismount(write_mount_dir): raise RuntimeError('write-enabled CLI mount failed')
+                if a.vscode_check:
+                    vscode_env = os.environ.copy()
+                    vscode_env.update({'AIDPFS_E2E_WORKSPACE': write_mount_dir, 'AIDPFS_E2E_FILE': 'vscode-e2e.txt',
+                        'AIDPFS_E2E_EXTERNAL_FILE': 'vscode-external.txt', 'AIDPFS_E2E_REMOTE_ROOT': root})
+                    vscode = subprocess.run(['scripts/tests/vscode/run.sh', write_mount_dir], env=vscode_env,
+                        capture_output=True, text=True, timeout=360)
+                    if vscode.returncode:
+                        print('VS Code E2E output (last lines):', flush=True)
+                        print('\n'.join((vscode.stdout + '\n' + vscode.stderr).splitlines()[-80:]), flush=True)
+                        raise RuntimeError('VS Code E2E failed')
+                    vscode_check = request('GET', contents(vscode_path), params={'content': 1})
+                    if not vscode_check.ok: raise RuntimeError('VS Code saved FILE verification failed')
+                    model = vscode_check.json()
+                    vscode_data = base64.b64decode(model['content']) if model.get('format') == 'base64' else model.get('content', '').encode()
+                    if b'aidpfs-vscode-saved' not in vscode_data or b'aidpfs-vscode-dirty' not in vscode_data:
+                        raise RuntimeError('VS Code saved markers are missing from the synthetic FILE')
+                    external_check = request('GET', contents(external_path), params={'content': 1})
+                    if not external_check.ok: raise RuntimeError('VS Code external-update FILE verification failed')
+                    external_model = external_check.json()
+                    external_data = base64.b64decode(external_model['content']) if external_model.get('format') == 'base64' else external_model.get('content', '').encode()
+                    if external_data != b'aidpfs-vscode-external-update\n':
+                        raise RuntimeError('external API update did not persist to the synthetic FILE')
+                    print('VS Code open/search/edit/save/reopen, dirty buffer and unsupported rename/delete verified by signed GET', flush=True)
                 if a.vim_check:
                     vim_target = os.path.join(write_mount_dir, 'vim-fixture.txt')
                     path_stat = os.stat(vim_target)
@@ -339,8 +396,8 @@ def main():
                     capture_output=True, text=True, timeout=60)
                 if diagnostic.returncode or 'confirmed=true observation=file_listed' not in diagnostic.stdout or created_path in diagnostic.stdout:
                     raise RuntimeError('create intent diagnosis failed')
-                print('experimental CLI create intent diagnosis succeeded', flush=True)
-                print('experimental CLI create, write, fsync and duplicate rejection succeeded', flush=True)
+                print('write-enabled CLI create intent diagnosis succeeded', flush=True)
+                print('write-enabled CLI create, write, fsync and duplicate rejection succeeded', flush=True)
                 if a.git_check:
                     # Keep Git metadata on a local temporary filesystem. Only the
                     # explicitly named synthetic file is read from the mount.
@@ -390,7 +447,7 @@ def main():
                     '--id', dir_intents[0]['id'], '--region', a.region, '--profile', a.profile, '--endpoint', a.endpoint],
                     capture_output=True, text=True, timeout=60)
                 if diagnostic.returncode or 'confirmed=true observation=directory_listed' not in diagnostic.stdout: raise RuntimeError('directory diagnosis failed')
-                print('experimental CLI mkdir, duplicate rejection and intent diagnosis succeeded', flush=True)
+                print('write-enabled CLI mkdir, duplicate rejection and intent diagnosis succeeded', flush=True)
                 child_path = created_dir + '/child.bin'
                 with open(os.path.join(write_mount_dir, 'cli-dir', 'child.bin'), 'xb', buffering=0) as child_file:
                     child_file.write(b'nested-synthetic')
@@ -418,7 +475,7 @@ def main():
                 model = child_response.json()
                 child_data = base64.b64decode(model['content']) if model.get('format') == 'base64' else model['content'].encode()
                 if child_data != b'Nested-synthetic+!': raise RuntimeError('nested file mismatch')
-                print('experimental CLI append flag changes preserved write positions', flush=True)
+                print('write-enabled CLI append flag changes preserved write positions', flush=True)
                 for operation, target in ((os.unlink, os.path.join(write_mount_dir, 'cli-dir', 'child.bin')),
                                           (os.rmdir, os.path.join(write_mount_dir, 'cli-dir'))):
                     try:
@@ -426,7 +483,7 @@ def main():
                         raise RuntimeError('unsupported FUSE delete unexpectedly succeeded')
                     except OSError as exc:
                         if exc.errno != errno.EOPNOTSUPP: raise
-                print('experimental CLI unlink and rmdir refused', flush=True)
+                print('write-enabled CLI unlink and rmdir refused', flush=True)
                 if {item.get('path') for item in listing(created_dir)} != {child_path}: raise RuntimeError('unexpected nested directory contents')
                 child_intents = []
                 for name in os.listdir(recovery_dir):
@@ -440,28 +497,28 @@ def main():
                     '--id', child_intents[0]['id'], '--region', a.region, '--profile', a.profile, '--endpoint', a.endpoint],
                     capture_output=True, text=True, timeout=60)
                 if diagnostic.returncode or 'confirmed=true observation=not_listed' not in diagnostic.stdout: raise RuntimeError('removed child diagnosis failed')
-                print('experimental CLI nested create, write, append, read, cleanup and not_listed diagnosis succeeded', flush=True)
+                print('write-enabled CLI nested create, write, append, read, cleanup and not_listed diagnosis succeeded', flush=True)
                 with open(os.path.join(write_mount_dir, 'upload-par.bin'), 'r+b', buffering=0) as handle:
                     handle.seek(0)
                     handle.write(b'Z')
                     os.fsync(handle.fileno())
                     check = request('GET', contents(upload_path), params={'content': 1})
-                    if not check.ok: raise RuntimeError('experimental CLI verification failed')
+                    if not check.ok: raise RuntimeError('write-enabled CLI verification failed')
                     model = check.json()
                     binary = base64.b64decode(model['content']) if model.get('format') == 'base64' else model['content'].encode()
-                    if binary != b'Z' + upload_bytes[1:]: raise RuntimeError('experimental CLI write mismatch')
+                    if binary != b'Z' + upload_bytes[1:]: raise RuntimeError('write-enabled CLI write mismatch')
                     handle.seek(0)
                     handle.write(upload_bytes[:1])
                     os.fsync(handle.fileno())
                 check = request('GET', contents(upload_path), params={'content': 1})
-                if not check.ok: raise RuntimeError('experimental CLI restore verification failed')
+                if not check.ok: raise RuntimeError('write-enabled CLI restore verification failed')
                 model = check.json()
                 binary = base64.b64decode(model['content']) if model.get('format') == 'base64' else model['content'].encode()
-                if binary != upload_bytes: raise RuntimeError('experimental CLI restore mismatch')
+                if binary != upload_bytes: raise RuntimeError('write-enabled CLI restore mismatch')
                 refreshed_meta = request('POST', base + '/actions/downloadFileMeta', params={'shouldGenerateNewPar': 'true'}, headers=upload_headers)
-                if not refreshed_meta.ok or not refreshed_meta.json().get('eTag'): raise RuntimeError('experimental CLI restore ETag unavailable')
+                if not refreshed_meta.ok or not refreshed_meta.json().get('eTag'): raise RuntimeError('write-enabled CLI restore ETag unavailable')
                 put_etag = refreshed_meta.json()['eTag']
-                print('experimental CLI write, fsync, remote read and restore succeeded', flush=True)
+                print('write-enabled CLI write, fsync, remote read and restore succeeded', flush=True)
                 cli_success = True
             finally:
                 if os.path.ismount(write_mount_dir):
@@ -474,13 +531,13 @@ def main():
                         cli.kill()
                         cli.wait()
                 if cli.returncode != 0: cli_success = False
-                if os.path.ismount(write_mount_dir): raise RuntimeError('experimental CLI mount still active')
+                if os.path.ismount(write_mount_dir): raise RuntimeError('write-enabled CLI mount still active')
                 os.rmdir(write_mount_dir)
                 if cli_success:
                     shutil.rmtree(recovery_dir)
                 else:
-                    print('experimental CLI recovery directory retained', recovery_dir, flush=True)
-                    raise RuntimeError('experimental CLI check failed')
+                    print('write-enabled CLI recovery directory retained', recovery_dir, flush=True)
+                    raise RuntimeError('write-enabled CLI check failed')
         if a.go_par_test:
             if not put_etag: raise RuntimeError('Go PAR test requires a completed synthetic upload')
             delete_fixture = root + '/live-delete.bin'
@@ -691,7 +748,7 @@ def main():
         # Exercise representative notebook structure with synthetic cells and output.
         if notebook in owned:
             model = {'cells': [
-                {'cell_type': 'markdown', 'id': 'mdprobe1', 'metadata': {'tags': ['probe']}, 'source': ['# synthetic\n']},
+                {'cell_type': 'markdown', 'id': 'mdprobe1', 'metadata': {'tags': ['probe']}, 'source': ['# synthetic\n'], 'attachments': {'synthetic.txt': {'text/plain': 'synthetic attachment'}}},
                 {'cell_type': 'code', 'id': 'codeprobe1', 'metadata': {'custom': 'value'}, 'execution_count': 1,
                  'source': ['print(1)\n'], 'outputs': [{'output_type': 'stream', 'name': 'stdout', 'text': ['1\n']}]}
             ], 'metadata': {'kernelspec': {'name': 'python3', 'display_name': 'Python 3', 'language': 'python'}, 'probe': {'version': 1}},
@@ -699,6 +756,18 @@ def main():
             rich = request('PUT', contents(notebook), json={'type': 'notebook', 'format': 'json', 'content': model})
             rich_get = request('GET', contents(notebook), params={'content': 1})
             returned = rich_get.json().get('content') if rich_get.ok else None
+            export_response = request('POST', base + '/notebook/api/actions/export/contents/' + quote(notebook.lstrip('/'), safe=''),
+                                      json={'format': 'ipynb'})
+            exported = export_response.json().get('content') if export_response.ok else None
+            if isinstance(exported, str):
+                try: exported = json.loads(exported)
+                except ValueError: exported = None
+            print('notebook export status', export_response.status_code,
+                  'format', export_response.json().get('format') if export_response.ok else None,
+                  'content structurally equals contents GET', exported is not None and exported == returned,
+                  'export content type', type(export_response.json().get('content')).__name__ if export_response.ok else None,
+                  'attachments preserved', bool(exported and exported.get('cells') and exported['cells'][0].get('attachments')),
+                  flush=True)
             print('rich notebook PUT/GET status', rich.status_code, rich_get.status_code,
                   'cells equal', returned is not None and returned.get('cells') == model['cells'],
                   'metadata equal', returned is not None and returned.get('metadata') == model['metadata'],

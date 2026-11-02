@@ -13,8 +13,8 @@ import (
 	"aidpfs/internal/writeback"
 )
 
-// parWriter connects the opt-in experimental writeback coordinator to OCI.
-// Recovery and rename semantics are not yet verified end-to-end.
+// parWriter connects the supported single-mount FILE write path to OCI.
+// Rename is deliberately unsupported; failures retain local recovery state.
 type parWriter struct {
 	reader    *Reader
 	transport *parTransport
@@ -86,8 +86,8 @@ func (w *parWriter) Verify(ctx context.Context, t writeback.Target, tag string, 
 
 var _ writeback.Remote = (*parWriter)(nil)
 
-// OpenExperimentalBuffer prepares an existing normal file for the opt-in
-// experimental mount. It is not a production write implementation.
+// OpenExperimentalBuffer prepares an existing regular FILE for the write-enabled
+// mount. It rejects Notebook objects and pins the initial storage version.
 func (r *Reader) OpenExperimentalBuffer(ctx context.Context, rel, region string, journal *recovery.Store) (*writeback.Buffer, error) {
 	if journal == nil || rel == "" {
 		return nil, syscall.EINVAL

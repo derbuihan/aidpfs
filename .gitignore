@@ -36,3 +36,10 @@ go.work.sum
 
 # Local build output
 /aidpfs
+.vscode-test/
+node_modules/
+dist/
+__pycache__/
+scripts/tests/vscode/.vscode-test/
+scripts/tests/vscode/node_modules/
+scripts/tests/vscode/dist/

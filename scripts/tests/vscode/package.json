@@ -1,0 +1,17 @@
+{
+  "name": "aidpfs-vscode-e2e",
+  "private": true,
+  "version": "0.0.1",
+  "scripts": {
+    "build": "tsc -p .",
+    "test": "node dist/scripts/runTest.js"
+  },
+  "devDependencies": {
+    "@types/mocha": "^10.0.10",
+    "@types/node": "^22.15.0",
+    "@types/vscode": "^1.111.0",
+    "@vscode/test-electron": "^2.5.2",
+    "mocha": "^10.8.2",
+    "typescript": "^5.8.3"
+  }
+}

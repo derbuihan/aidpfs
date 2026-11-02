@@ -1,0 +1,25 @@
+services:
+  vscode-test:
+    build:
+      context: .
+      dockerfile: Dockerfile.vscode-test
+    privileged: true
+    devices:
+      - /dev/fuse:/dev/fuse:rwm
+    cap_add:
+      - SYS_ADMIN
+    security_opt:
+      - apparmor:unconfined
+    volumes:
+      - .:/work
+      - ${AIDPFS_OCI_CONFIG_DIR:?set AIDPFS_OCI_CONFIG_DIR}:${AIDPFS_OCI_CONFIG_DIR:?set AIDPFS_OCI_CONFIG_DIR}:ro
+    working_dir: /work
+    environment:
+      OCI_CONFIG_FILE: ${AIDPFS_OCI_CONFIG_DIR:?set AIDPFS_OCI_CONFIG_DIR}/config
+      AIDPFS_PYTHON: /opt/oci/bin/python
+      HOME: /root
+      AIDPFS_PROBE_PLATFORM: ${AIDPFS_PLATFORM_ID:-}
+      AIDPFS_PROBE_WORKSPACE: ${AIDPFS_WORKSPACE_KEY:-}
+      AIDPFS_PROBE_PROFILE: ${AIDPFS_PROFILE:-OCI_TOKYO}
+      AIDPFS_PROBE_REGION: ${AIDPFS_REGION:-ap-osaka-1}
+      AIDPFS_PROBE_ENDPOINT: ${AIDPFS_ENDPOINT:-https://aidp.ap-osaka-1.oci.oraclecloud.com}

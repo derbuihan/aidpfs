@@ -72,26 +72,26 @@ Oracle AI Data Platform (AIDP) Workbench の workspace をローカルから操�
 
 ### 7. AIDP 書き込み API の再調査と契約確定
 
-- [ ] **API全体の対応表**: Oracle公式REST仕様と対象tenantの実測を照合し、contents POST/PUT/PATCH/DELETE、WorkspaceObject create/update/delete/rename/move、upload/download PAR とObject Storage転送、Notebook exportを FILE/FOLDER/NOTEBOOK 別に記録する。各操作のpath/encoding、body/header、status/response、ETag/if-match、work-request、作成・上書き・削除結果を含める。公式仕様と実測が異なる箇所は差分を明示し、URL・署名・内容は記録しない。[Notebook API](https://docs.oracle.com/en/cloud/paas/ai-data-platform/aiwap/api-notebook.html)、[WorkspaceObject API](https://docs.oracle.com/en/cloud/paas/ai-data-platform/aiwap/api-workspaceobject.html)。
-- [ ] **競合と失敗時の保証**: ETagの取得元/対象範囲、誤ったif-match、同時PUT、外部Workbench更新、PARのversion/conditional header、作成の重複、timeout前後のunknown outcome、`opc-retry-token` の重複要求と期限、async work-request完了、実際のサイズ/path制限と各principalの認可を専用synthetic領域で検証する。特に公式PUT/DELETEのif-match説明と、これまで一部endpointで不正値が受理された実測の差を解消する。[Notebook PUT](https://docs.oracle.com/en/cloud/paas/ai-data-platform/aiwap/op-aidataplatforms-aidataplatformid-workspaces-workspacekey-notebook-api-contents-contentpath-put.html)、[WorkspaceObject DELETE](https://docs.oracle.com/en/cloud/paas/ai-data-platform/aiwap/op-aidataplatforms-aidataplatformid-workspaces-workspacekey-objects-objectpath-delete.html)。
-- [ ] **安全な操作契約**: create、既存FILEのoverwrite、truncate/append、mkdir、rename、unlink/rmdir、Notebook saveについて、操作ごとの競合保護・再試行・復旧要件とPOSIX動作を定義する。安全性を実証できない操作は、成功したように見せず非対応のままにする。検証対象は UUID 専用synthetic rootに限定し、作成物のcleanupと消失確認を必須にする。
+- [x] **API全体の対応表**: 2026-11-02、Oracle公式仕様とsandbox tenantのsynthetic実測を、contents POST/PUT/PATCH/DELETE、WorkspaceObject create/update/delete/rename/move、upload/download PAR、Object Storage転送、Notebook export別に比較。FILE/FOLDER/NOTEBOOKのmethod・path・encoding・body/header・status/response・ETag/if-match・work-request・副作用を[private契約表](docs/20261102_AIDP書込みAPI契約.md)に記録し、公式仕様との差異・tenant観測・未測定を区別。URL・署名・内容は保存しない。
+- [x] **競合と失敗時の保証**: 2026-11-02、synthetic rootで誤if-match、PAR stale/current条件付きPUT・同時PUT、Workbench外部更新、duplicate create、unknown outcome/journal、retry-token重複、実効期限観測を検証。retry-token replayは初回200・再送500だがobject一つとbytes保持。async work-requestの成功応答、別principal/ACL、最大object/path、実際の容量上限はこのtenantで発生・安全に確認できず、未測定として契約に明記し製品上限64 MiB・OCI API key principalに限定。安全性を担保しないif-match経路は書込み契約に使わない。[契約](docs/20261102_AIDP書込みAPI契約.md)。
+- [x] **安全な操作契約**: 2026-11-02、FILE create/update/truncate/append/fsyncとmkdirは非上書きintent、conditional PAR、検証、journalによる契約で固定。rename/unlink/rmdir/Notebook saveは競合保護・復旧を実証できないため `EOPNOTSUPP` / read-only。結果不明は自動再送せずjournalと合成fixtureを照合し、正常run後は専用rootの削除と親一覧からの消失を確認。[README](README.md)、[契約](docs/20261102_AIDP書込みAPI契約.md)。
 
 ### 8. 安定した FILE 書き込み
 
-- [ ] **API backend**: 調査で確認した安全な経路だけを使い、FILE create/overwrite/write/truncate/append/fsyncの失敗・競合・結果確認を実装する。unknown outcomeの自動再送を避け、既存journalを使った安全な再開/手動復旧手順を明確にする。
-- [ ] **FUSE/POSIX操作**: エディタの保存方式を含め、create、open、write、truncate、append、fsync、close、rename、delete、mkdir/rmdirの各操作を契約に合わせる。rename/deleteはAPIが競合時の安全性を保証する方法が得られた場合のみ有効化する。
-- [ ] **experimental表記の解除判定**: mock/race/障害、実AIDP API、実FUSE、複数handle/外部更新、保存後の独立GET、復旧とcleanupを検証し、対応操作・未対応操作・データ保護限界をREADME/TASKに反映する。受入条件を満たすまではexperimental writeを通常の安全な書込みとして案内しない。
+- [x] **API backend**: 2026-11-02、FILE create/update/write/truncate/append/fsyncをconditional Object Storage PARとAIDP metadata completionで実装。失敗・競合はmock/raceと実AIDPで検証し、unknown outcomeは再送せずjournalを残して復旧CLIで照合する。
+- [x] **FUSE/POSIX操作**: 2026-11-02、FILE create/open/write/truncate/append/fsync/flush/closeとmkdirを契約に合わせ、VS Codeのopen/search/edit/save/reopen・dirty buffer・外部更新・rename/delete拒否を実AIDP FUSEで確認。rename/unlink/rmdirは安全なAPI保証がないため拒否を維持。
+- [x] **experimental表記の解除判定**: 2026-11-02、mock/race/障害、実AIDP API・PAR、実FUSE、複数handle/外部更新、独立GET、journal recovery、cleanup、VS Code E2Eが成功。CLIを `--write` に変更しWARNINGを解除。README/TASKにFILE/FOLDER対応範囲、Notebook/rename/delete未対応、単一writer・64 MiB・unknown outcomeの限界を明記。
 
 ### 9. Notebook 書き込み
 
-- [ ] **保存形式とWorkbench競合**: contents PUTとNotebook exportでcells/metadata/outputs/attachments/formatを比較し、lossless read-modify-write、Workbench周期autosaveとの競合、ETag/if-matchが実際に競合を防ぐ条件を実測する。[Notebook export](https://docs.oracle.com/en/cloud/paas/ai-data-platform/aiwap/op-aidataplatforms-aidataplatformid-workspaces-workspacekey-notebook-api-actions-export-contents-contentpath-post.html)。
-- [ ] **Notebook write support**: 並行Workbench編集で他者の更新を失わない競合検出・回復契約を確立したうえでNotebook保存を実装し、Workbench UI/REST/API/FUSEの往復と失敗を検証する。安全な競合制御が確立するまではNotebook write-openを有効にしない。
+- [x] **保存形式とWorkbench競合**: 2026-11-02、rich synthetic notebookのcontents GETとexport ipynb (HTTP 200) を構造比較。source表現、cell metadata/outputsの正規化があり、PAR JSONもcontentsと一致せずlossless roundtripは未成立。さらにWorkbench周期autosaveが別client REST PUTを上書きし、wrong if-matchも拒否されなかったためversion conflict controlなしと判定。[契約](docs/20261102_AIDP書込みAPI契約.md)。
+- [x] **Notebook write support**: 2026-11-02、競合検出とlossless保存/回復契約を確立できないことを実Notebook UI・REST・API比較で確認。安全なNotebook write-openは実装せずread-onlyを維持し、READMEとFUSE動作に明記する判断を完了。
 
 ### 10. VS Code 実行環境と E2E
 
 - [x] **環境の実現可能性**: 2026-11-02、ホストでDocker 29.9.1 daemon・Compose 5.6.0、読み書き可能な`/dev/fuse`、VS Code CLI、OCI configと読取り可能な署名鍵を確認。`wsfs` は `Dockerfile.vscode-test` のNode 20/Xvfb/VS Code test runnerと、ComposeのFUSE device・SYS_ADMIN・privileged containerでE2Eを動かす。AIDP環境もDockerベースで整備可能だが、aidpfsのGo 1.26に合わせたimage、OCI configのread-only mount、AIDP用runnerが必要。wsfsのrunnerは`.env`のDatabricks credentialsを必須とするため、そのままは使わない。
-- [ ] **AIDP用runner整備**: Go 1.26、Node、Xvfb、VS Code test runnerとFUSEを備える隔離Docker Compose serviceを作る。OCI config/keyはread-onlyでコンテナに渡し、秘密を環境変数・ログ・成果物へ出さない。既存`wsfs`コードは依存せず、その実行方式とテスト設計だけを参考にする。
-- [ ] **VS Code E2E**: 専用synthetic FILE/Workspaceでopen/read/search/edit/save/reopen、dirty buffer、外部更新、VS Codeの一時ファイル/rename/delete要求、fsync/error表示を検証する。AIDP APIで対象fixtureだけをcleanupして親一覧から消えたことを確認し、read-only/FILE write/Notebookの結果を別々に記録する。
+- [x] **AIDP用runner整備**: 2026-11-02、Go 1.26/Node 20/Xvfb/VS Code test runner/FUSE付きDocker Composeを追加。OCI config directoryをread-onlyでbind mountし、API keyは環境変数や成果物に置かない。wsfsのrunner方式を参照した独立構成。[runner](scripts/test-vscode-docker.sh)、[image](Dockerfile.vscode-test)、[compose](docker-compose.vscode.yml)。
+- [x] **VS Code E2E**: 2026-11-02、実AIDP UUID synthetic root上のFILEでVS Code open/read/search/edit/save/reopen、dirty buffer保持、外部API更新とreopen、rename/delete拒否を検証。FUSE `fsync`/API GETで保存結果を照合し、対象fixtureを削除後にrootが親一覧から消えたことを確認。Notebookは別途read-onlyと決定。Docker runnerのrace suite/ビルドと実AIDP PAR/FUSE live suiteも成功。
 
 ## 完了
 

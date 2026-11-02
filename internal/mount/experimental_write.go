@@ -429,8 +429,8 @@ func mountExperimentalWithState(ctx context.Context, mountpoint string, reader b
 	return &ExperimentalMount{Server: server, buffers: buffers}, nil
 }
 
-// MountExperimental provides explicitly opted-in experimental file writes. It is
-// incomplete and must not be presented as a general purpose writable mount.
+// MountExperimental provides the supported, explicitly enabled FILE write
+// operations. Notebook writes, rename and deletion remain unsupported.
 func MountExperimental(ctx context.Context, mountpoint string, reader backend.Reader, open func(context.Context, string) (*writeback.Buffer, error), create, mkdir func(context.Context, string) error) (*ExperimentalMount, error) {
 	return mountExperimentalWithState(ctx, mountpoint, reader, open, create, mkdir)
 }

@@ -1,0 +1,8 @@
+{
+  "name": "aidpfs-vscode-test-extension",
+  "displayName": "aidpfs test extension",
+  "version": "0.0.1",
+  "publisher": "aidpfs",
+  "engines": { "vscode": "^1.111.0" },
+  "extensionKind": ["workspace"]
+}

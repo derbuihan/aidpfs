@@ -29,8 +29,8 @@ func run() error {
 	flag.StringVar(&c.RemotePath, "remote-path", "", "absolute workspace subtree")
 	flag.StringVar(&c.MountPoint, "mount-point", "", "absolute local mount directory")
 	showVersion := flag.Bool("version", false, "print version")
-	experimentalWrite := flag.Bool("experimental-write", false, "enable incomplete file writes; use isolated test data only")
-	recoveryDir := flag.String("recovery-dir", "", "existing private recovery directory (required for experimental writes)")
+	writeEnabled := flag.Bool("write", false, "enable FILE writes; Notebook write, rename, and delete are unsupported")
+	recoveryDir := flag.String("recovery-dir", "", "existing private recovery directory (required with --write)")
 	flag.Parse()
 	if *showVersion {
 		fmt.Println("aidpfs", version)
@@ -39,8 +39,8 @@ func run() error {
 	if flag.NArg() != 0 {
 		return fmt.Errorf("unexpected positional arguments")
 	}
-	if *experimentalWrite != (*recoveryDir != "") {
-		return fmt.Errorf("--experimental-write and --recovery-dir must be specified together")
+	if *writeEnabled != (*recoveryDir != "") {
+		return fmt.Errorf("--write and --recovery-dir must be specified together")
 	}
 	if err := c.Validate(); err != nil {
 		return err
@@ -56,9 +56,9 @@ func run() error {
 		return err
 	}
 	var server *fuse.Server
-	var experimental *mount.ExperimentalMount
+	var writeMount *mount.ExperimentalMount
 	var journal *recovery.Store
-	if *experimentalWrite {
+	if *writeEnabled {
 		store, openErr := recovery.Open(*recoveryDir)
 		if openErr != nil {
 			return fmt.Errorf("recovery directory: %w", openErr)
@@ -69,8 +69,7 @@ func run() error {
 		}
 		defer lock.Close()
 		journal = store
-		fmt.Fprintln(os.Stderr, "WARNING: experimental writes are incomplete; use isolated test data only. Recovery entries must be reviewed manually.")
-		experimental, err = mount.MountExperimental(context.Background(), c.MountPoint, r, func(ctx context.Context, rel string) (*writeback.Buffer, error) {
+		writeMount, err = mount.MountExperimental(context.Background(), c.MountPoint, r, func(ctx context.Context, rel string) (*writeback.Buffer, error) {
 			return r.OpenExperimentalBuffer(ctx, rel, c.Region, store)
 		}, func(ctx context.Context, rel string) error {
 			return journalCreate(ctx, store, c, rel, "FILE", r.CreateEmptyExperimental)
@@ -78,7 +77,7 @@ func run() error {
 			return journalCreate(ctx, store, c, rel, "FOLDER", r.CreateDirectoryExperimental)
 		})
 		if err == nil {
-			server = experimental.Server
+			server = writeMount.Server
 		}
 	} else {
 		server, err = mount.Mount(context.Background(), c.MountPoint, r)
@@ -90,9 +89,9 @@ func run() error {
 	signal.Notify(done, os.Interrupt, syscall.SIGTERM)
 	defer signal.Stop(done)
 	waitForUnmount(server, done, os.Stderr)
-	if experimental != nil {
-		experimental.Drain()
-		return checkRecoveryAfterUnmount(experimental.Pending(), journal)
+	if writeMount != nil {
+		writeMount.Drain()
+		return checkRecoveryAfterUnmount(writeMount.Pending(), journal)
 	}
 	return nil
 }

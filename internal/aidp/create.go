@@ -11,14 +11,14 @@ import (
 	"aidpfs/internal/config"
 )
 
-// CreateEmptyExperimental makes one non-overwriting attempt to create a normal
-// empty file. A transport error or server failure is ambiguous: the file may
+// CreateEmptyExperimental makes one non-overwriting attempt to create a regular
+// empty FILE. A transport error or server failure is ambiguous: the file may
 // already exist, so callers must not retry automatically.
 func (r *Reader) CreateEmptyExperimental(ctx context.Context, rel string) error {
 	return r.createObjectExperimental(ctx, rel, "FILE")
 }
 
-// CreateDirectoryExperimental creates an empty directory without overwrite.
+// CreateDirectoryExperimental creates an empty FOLDER without overwrite.
 func (r *Reader) CreateDirectoryExperimental(ctx context.Context, rel string) error {
 	return r.createObjectExperimental(ctx, rel, "FOLDER")
 }

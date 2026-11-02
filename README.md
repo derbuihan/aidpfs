@@ -1,8 +1,8 @@
 # aidpfs
 
-`aidpfs` is an experimental Linux FUSE filesystem for reading one Oracle AI Data Platform (AIDP) Workbench workspace subtree. It uses the WorkspaceObject and notebook contents APIs with OCI API-key authentication. It is under development; see [TASK.md](TASK.md) for outstanding work.
+`aidpfs` is an experimental Linux FUSE filesystem for reading one Oracle AI Data Platform (AIDP) Workbench workspace subtree. It uses the WorkspaceObject and notebook contents APIs with OCI API-key authentication. The supported scope and verification status are tracked in [TASK.md](TASK.md).
 
-**The default mount is read-only.** An explicitly enabled experimental mode can create directories and create or modify regular files, and is intended only for isolated test data. Renaming, deletion and notebook saving are not supported. In a tested AIDP environment, both contents and WorkspaceObject updates accepted an incorrect `if-match` and changed data; do not rely on those APIs for conflict protection without independently verifying your environment.
+**The default mount is read-only.** An explicitly enabled write mode supports regular FILE creation and modification and directory creation. Rename, deletion and Notebook saving remain unsupported. FILE updates use conditional Object Storage PAR transfers; the tested AIDP contents and WorkspaceObject APIs accepted an incorrect `if-match`, so their headers are not treated as conflict protection.
 
 ## Requirements
 
@@ -22,6 +22,16 @@ mkdir -p "$HOME/aidp-mount"
   --remote-path /Workspace --mount-point "$HOME/aidp-mount"
 ```
 
+The read-only command above is the default. For supported FILE writes, first create a private empty journal directory and use `--write --recovery-dir`:
+
+```sh
+install -d -m 700 "$HOME/aidpfs-recovery"
+./aidpfs --profile OCI_PROFILE --region REGION \
+  --platform-id PLATFORM_OCID --workspace-key WORKSPACE_KEY \
+  --remote-path /Workspace/Shared --mount-point "$HOME/aidp-mount" \
+  --write --recovery-dir "$HOME/aidpfs-recovery"
+```
+
 The process stays in the foreground. The endpoint defaults to `https://aidp.<region>.oci.oraclecloud.com`; use `--endpoint` for a different HTTPS AIDP origin. OCI configuration defaults to `~/.oci/config`; set `OCI_CONFIG_FILE` to choose another file. Credentials belong in OCI's configuration and private key files, not command arguments or logs. Use `--version` for the build version and `--help` for flags.
 
 Unmount in a second terminal with `fusermount3 -u "$HOME/aidp-mount"`, or stop the foreground process with Ctrl-C. Verify the directory is no longer mounted before removing it. If signal-triggered unmount fails, the process reports the error and remains running; close processes using the mount and send Ctrl-C again or retry unmounting externally. Avoid force-unmounting an unrelated filesystem.
@@ -33,50 +43,44 @@ Unmount in a second terminal with `fusermount3 -u "$HOME/aidp-mount"`, or stop t
 - `statfs` returns `EOPNOTSUPP`: the AIDP workspace API does not provide filesystem capacity or quota, and reporting zero-valued capacity fields would be misleading.
 - Files are fetched in full on open and held in memory for that open. Each open gets a snapshot; a later open fetches again. Metadata and negative lookup TTLs are zero and direct I/O bypasses the kernel page cache. Concurrent changes between separate API operations can still produce inconsistent results.
 - `stat` fetches file contents to report the size actually returned. API responses larger than 64 MiB fail with `EFBIG`, so binary file size limits depend on the encoded response. This approach can use substantial memory and API requests.
-- Notebooks are exposed as the JSON content returned by the contents API. They may not have the same byte representation as the original stored notebook. Synthetic REST tests showed first-save normalization in cell source representation and metadata, an output structure difference, and PAR JSON differing from contents JSON; a subsequent read-save-read of the normalized response was stable. Workbench UI behavior and preservation of existing notebooks remain unverified.
+- Notebooks are exposed read-only as the JSON content returned by the contents API. Rich Notebook PUT/export tests showed normalized cell source, metadata/output representation changes, and PAR JSON differing from contents JSON. A Workbench UI test reproduced periodic autosave overwriting an external REST update without conflict detection; Notebook writes remain disabled. Preservation of every existing Notebook field has not been established.
 - In the tested tenancy, contents API creation accepted ASCII and space in names but returned `400 InvalidParameter` for Japanese characters, `%`, and `#`. This is an observation for that write route and encoding, not a claim about reading existing names or other AIDP APIs.
 - Unsupported object types cause directory listing to fail, rather than being silently hidden. The `objects` and contents APIs do not have identical path behavior; only the tested `/Workspace` subtree is known to work. Directory listing, permissions, and paths may differ across AIDP deployments.
-- GET requests alone are retried for selected transient failures. The default mount does not use PAR. Workbench UI editing, multi-user access, and large-file behavior are not yet verified end to end; the limited Vim and Git checks described below do not cover ordinary editor settings or full Git workflows.
+- GET requests alone are retried for selected transient failures. The default mount does not use PAR. The sandbox AIDP/VS Code FILE E2E is verified, while multi-user access, other AIDP deployments, and large-file workloads are not. The Vim and Git checks do not cover ordinary editor settings or full Git workflows.
 
-## Experimental file writes
+## FILE writes
 
-Use only a dedicated test subtree containing disposable regular files. Create a private, empty journal directory and add `--experimental-write --recovery-dir /absolute/private/directory` to the mount command. Both options must be supplied together. A warning is printed at startup; the read-only mode remains the default.
+The default mount remains read-only. To enable the supported FILE and directory operations, create a private, empty journal directory and pass `--write --recovery-dir /absolute/private/directory`; both options are required together. Notebook writes, rename, unlink and rmdir remain unsupported and return `EOPNOTSUPP` in write mode. Keep the journal private because it contains file contents and recovery metadata.
 
-This mode is incomplete: it cannot rename or delete files or save notebooks, and many editors rely on those operations. File and directory creation use non-overwriting requests, but if a request fails or a subsequent file open fails the object may still exist; inspect the target before retrying. A durable create intent records the target before the request; `recovery list` shows intents and whether the server returned success. An unconfirmed intent does not establish whether creation occurred, and a confirmed intent does not establish that the object still exists or that opening it succeeded. Directories are exposed as 0700 and files as 0600 regardless of requested mode. The mount holds files in memory, limits them to 64 MiB and writes a full local journal snapshot for each mutation; storage usage can grow quickly. Writes use conditional Object Storage PAR operations and post-write verification, but these do not provide a transaction across all AIDP clients and metadata operations. Concurrent clients, multiple mounts, crashes, shutdown, disk exhaustion, and Workbench editing are not fully validated. A failed or uncertain save freezes the affected buffer and requires manual recovery; journal entries are not automatically replayed or removed. Startup rejects a nonempty recovery directory and locks it against another cooperating mount while running. Inspect retained entries and use a new empty directory for another run; the directory lock does not prevent another mount with a different journal from accessing the same remote files. Use `fsync` and check its result; a successful close is not a complete recovery or durability guarantee.
+The write path is designed for single-user, single-mount FILE updates. It creates files without overwriting existing paths, journals create intent before making a remote request, and edits existing FILEs through a conditional Object Storage PAR upload followed by AIDP metadata completion and independent content verification. Unknown outcomes are never automatically retried. Conflicts or uncertain saves freeze the affected buffer and retain journal data for manual inspection. `fsync` reports the save result; close does not save or report a previous failure. Successful verification confirms the bytes at that version during the check, but does not lock out later updates from another client.
 
-The experimental operation contract is deliberately limited:
+The implementation has a 64 MiB file limit and keeps each open file in memory. Direct I/O avoids the kernel page cache. Create and mkdir use durable local intents; an interrupted or uncertain create may have created the remote object, so inspect it before retrying. Startup requires an existing empty private recovery directory and locks it against another cooperating mount. Use `fsync` and check its result. The implementation does not provide cross-mount or Workbench locking, atomic append across clients, general crash-proof storage, or a guarantee against disk exhaustion. Read the recovery procedure below before enabling writes on valuable data.
 
-| Operation | Result | Meaning |
+| Operation | Result | Contract |
 |---|---|---|
-| Create regular file / mkdir | Supported, no overwrite | A durable local intent precedes one remote request. A later open failure may leave the remote object present; inspect before retrying. |
-| Open existing regular file for write; write/truncate | Supported | Edits stay in a bounded in-memory buffer and local journal. Notebook writes are unsupported. |
-| `fsync` / synchronous write | Supported | Returns success only after conditional PAR transfer, metadata completion, and version/content verification. It does not prevent a later external update. |
-| `flush` | May be called more than once | Each writable flush attempts the same save path and returns its error. |
-| `release` / close | Releases local handle only | Does not start network I/O; close cannot report a save failure. Check `fsync` explicitly. |
-| `unlink`, `rmdir`, `rename` | `EOPNOTSUPP` | AIDP preconditions and deletion/move atomicity are not safe enough to expose. |
-| chmod, chown, timestamp changes | Read-only: `EROFS`; experimental: `EOPNOTSUPP` | AIDP does not expose these POSIX metadata operations. |
-| Open an existing file, then unlink | `EOPNOTSUPP`; open handle and path remain usable | Unlink itself is refused, so POSIX open-unlink semantics are unavailable. |
-| `forget` | Internal FUSE reference bookkeeping only | It is not a userspace operation and does not modify AIDP or recovery data. |
-| POSIX advisory locks | Kernel-local only | A local lock may succeed on one mount, but it is not sent to AIDP and does not coordinate with Workbench, other mounts, or clients. |
+| Create regular FILE / mkdir | Supported, no overwrite | A durable local intent precedes one remote request. Inspect after an uncertain result before retrying. |
+| Open existing FILE for write; write/truncate/append | Supported | Changes use a bounded local buffer and journal; conflicts preserve recoverable data. |
+| `fsync` / synchronous write | Supported | Returns success after conditional PAR transfer, metadata completion and version/content verification. |
+| `flush` | Supported | Each writable flush attempts the same save path and returns its error. |
+| `release` / close | Handle release only | Does not start network I/O. Check `fsync` explicitly. |
+| `unlink`, `rmdir`, `rename` | `EOPNOTSUPP` | AIDP delete/move did not provide a safe conditional operation in the tested environment. |
+| chmod, chown, timestamp changes | `EOPNOTSUPP` | AIDP does not expose these POSIX metadata operations. |
+| Open then unlink | `EOPNOTSUPP` | The open handle and path remain usable because unlink is refused. |
+| `forget` | Internal FUSE reference bookkeeping | Does not modify AIDP or recovery data. |
+| POSIX advisory locks | Kernel-local only | Does not coordinate with Workbench, other mounts, or clients. |
 | `statfs` | `EOPNOTSUPP` | AIDP capacity and quota are unavailable. |
 
-The read-only mount rejects write access, `O_TRUNC`, and `O_APPEND` with `EROFS`. The experimental mount supports tested read/write, truncate, append (including open-file status-flag changes), and synchronous-write flags; the FUSE server always uses direct I/O. `RENAME_NOREPLACE`, `RENAME_EXCHANGE`, other rename flags, and unknown rename flags all return `EOPNOTSUPP`. This is not an exhaustive compatibility claim for every Linux `open(2)` flag.
+The read-only mount rejects write access, `O_TRUNC`, and `O_APPEND` with `EROFS`. The write-enabled mount supports tested read/write, truncate, append (including open-file status-flag changes), and synchronous-write flags. The FUSE server uses direct I/O. Rename flags and unknown flags return `EOPNOTSUPP`; every Linux `open(2)` flag and broad concurrent workloads have not been tested.
 
-On a failed or uncertain `fsync`, the dirty buffer is frozen and its journal remains for manual inspection. `ESTALE` indicates a detected version conflict; other outcome-unknown failures also require reconciliation. A verified save means the expected bytes were observed at the saved version during verification, not that other clients are locked out.
+AIDP contents and WorkspaceObject endpoints accepted wrong `if-match` values in the tested environment. Conditional Object Storage PAR upload rejected stale `If-Match` with HTTP 412; two concurrent uploads produced one accepted update and one conflict. Workbench and a REST client can still overwrite each other without detecting the conflict, so write mode is scoped to a single writer. `opc-retry-token` replay returned HTTP 500 on the tested create route while leaving one object and its payload intact; the implementation does not depend on retry-token replay or retry uncertain POSTs.
 
-The experimental mount uses the write offset supplied by the kernel, including after `fcntl` changes to `O_APPEND`. Two-handle append and flag changes were tested on the current Linux FUSE environment; behavior across kernels and larger concurrent workloads remains unverified. Atomic append across mounts or other AIDP clients is not provided.
+The write mount reuses a live FUSE inode for repeated lookups of the same path and type. This is not a verified AIDP object identity: an external delete and recreation may not be distinguishable. The AIDP-specific VS Code E2E tested open, search, edit, save, reopen, dirty buffer preservation, unsupported rename/delete, and an external update observed after reopening. Ordinary editor settings and multi-user use remain outside the tested contract.
 
-The experimental mount reuses a live FUSE inode for repeated lookups of the same path and type. This inode is not a verified AIDP object identity: an external delete and recreation may not be distinguishable. A configured noninteractive Vim save has been tested on a synthetic file; ordinary Vim settings, VS Code, and Workbench editing remain unverified.
-
-For Git experiments, keep repository metadata on a local filesystem and specify it with `--git-dir` together with `--work-tree` pointing at the mount. A real AIDP synthetic-file test covered local repository initialization, `status`, `add`, `commit`, and `rg`; searching one file took about 4.1 seconds. It did not test a repository inside the mount, checkout, merge, reset, or operations that require rename and deletion. Search and Git operations may issue many remote requests.
-
-After the FUSE server stops, the experimental CLI rejects new state-changing operations, waits for already entered operations, and reports an error if it observes dirty buffers, invalid or unresolved snapshot records, or unconfirmed/invalid create intents. Prepared ancestors of a validated verified snapshot are treated as completed history; separate branches remain unresolved. Draining and the scan can take time; a stuck operation can delay exit. This check does not replace checking each write, `fsync` and close result, and abrupt termination or real network failures during shutdown have not been fully validated.
-
-Experimental `unlink`, `rmdir` and `rename` return `EOPNOTSUPP`. In the tested AIDP environment, both contents and WorkspaceObject DELETE removed a synthetic file despite an incorrect `if-match`; contents DELETE also removed a nonempty synthetic directory and its child. Rename accepted an incorrect `if-match`, and one concurrent rename experiment timed out. These observations do not establish safe conditional deletion or rename.
+After the FUSE server stops, the CLI drains already entered operations and reports unresolved dirty buffers, invalid journal records or unconfirmed create intents. Prepared ancestors of a validated verified snapshot are treated as completed history; other branches remain unresolved. Check each write and `fsync` result. The recovery commands below inspect retained entries and export verified content without replaying or deleting journals.
 
 ## Recovery journal inspection
 
-The experimental write mount retains local recovery entries; the default read-only mount does not. For an existing private recovery directory, inspect entries and export verified journal contents to a **new** local file:
+The write-enabled mount retains local recovery entries; the default read-only mount does not. For an existing private recovery directory, inspect entries and export verified journal contents to a **new** local file:
 
 ```sh
 ./aidpfs recovery list --dir /absolute/private/recovery-directory
@@ -100,7 +104,7 @@ Lineage validates the selected entry and its ancestors, including their contents
 
 ## Validation and development
 
-Run `scripts/tests/run.sh` for the formatting check, `go vet`, race-enabled tests and a binary build. It uses local HTTP servers and fake backends and needs no OCI credentials or network. The mount suite exercises local FUSE, snapshot/writeback, concurrent operations, recovery, permissions and secret redaction. `scripts/tests/run-enospc.sh` creates a temporary 64 MiB tmpfs with `sudo` and verifies that a real filesystem `ENOSPC` rejects a journaled FUSE write without changing its buffer or sending a remote PUT. `scripts/tests/run.sh --live` runs the opt-in PAR/FUSE integration against an already prepared disposable `/Workspace/Shared/aidpfs-probe-<32 lowercase hex digits>` fixture; it requires explicit `AIDPFS_PROBE_*` settings, OCI credentials and `/dev/fuse` access. AIDP and Workbench behavior still require their own live checks.
+Run `scripts/tests/run.sh` for the formatting check, `go vet`, race-enabled tests and a binary build. `scripts/test-vscode-docker.sh --build` builds the isolated Go/Node/Xvfb/FUSE runner; `scripts/test-vscode-docker.sh` runs the regular suite, and `scripts/tests/vscode/run-live.sh` runs the AIDP-specific VS Code E2E with explicit fixture settings. It uses local HTTP servers and fake backends and needs no OCI credentials or network. The mount suite exercises local FUSE, snapshot/writeback, concurrent operations, recovery, permissions and secret redaction. `scripts/tests/run-enospc.sh` creates a temporary 64 MiB tmpfs with `sudo` and verifies that a real filesystem `ENOSPC` rejects a journaled FUSE write without changing its buffer or sending a remote PUT. `scripts/tests/run.sh --live` runs the opt-in PAR/FUSE integration against an already prepared disposable `/Workspace/Shared/aidpfs-probe-<32 lowercase hex digits>` fixture; it requires explicit `AIDPFS_PROBE_*` settings, OCI credentials and `/dev/fuse` access. Live results apply only to the explicitly configured AIDP tenant and disposable fixture.
 
 The repository includes an isolated API research script under `scripts/`; it creates and removes test data in a dedicated remote folder and requires OCI credentials. Review its behavior before running it. Keep recovery journals, tokens, PAR URLs and downloaded content private.
 
