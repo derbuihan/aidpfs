@@ -11,6 +11,17 @@
 - The platform OCID and the **workspace key** returned by the workspace API. The key is not necessarily the workspace display name.
 - An existing, empty local mount directory owned by the current user. The examples use `/Workspace`; select a subtree available to your identity. The `/` remote root is currently unsupported because its API path mapping is not established.
 
+## Install the latest Linux preview
+
+The `latest` GitHub pre-release is rebuilt from each successful push to `main`; it is a moving preview, not a stable version. Open [the latest release](https://github.com/derbuihan/aidpfs/releases/tag/latest) and download the `.deb` package matching `amd64` or `arm64`. On Debian or Ubuntu, install it with:
+
+```sh
+sudo apt install ./aidpfs_*_$(dpkg --print-architecture).deb
+aidpfs --version
+```
+
+The package declares `fuse3` as an apt dependency. You still need a usable `/dev/fuse`, `fusermount3`, and an OCI API-key profile; installation does not configure AIDP credentials or grant FUSE permissions. The release also provides architecture-specific `.tar.gz` archives containing the binary and project notices, plus `SHA256SUMS` for verification. The latest workflow replaces prior GitHub Releases, so older preview assets are not retained there.
+
 ## Build and mount
 
 ```sh

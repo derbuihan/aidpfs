@@ -1,0 +1,62 @@
+version: 2
+project_name: aidpfs
+
+before:
+  hooks:
+    - go mod download
+
+builds:
+  - id: aidpfs
+    main: ./cmd/aidpfs
+    binary: aidpfs
+    env:
+      - CGO_ENABLED=0
+    mod_timestamp: '{{ .CommitTimestamp }}'
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w -X main.version={{ .Version }}
+    goos:
+      - linux
+    goarch:
+      - amd64
+      - arm64
+
+archives:
+  - id: linux
+    formats:
+      - tar.gz
+    name_template: 'aidpfs_{{ .Os }}_{{ .Arch }}'
+    files:
+      - README.md
+      - LICENSE
+      - THIRD_PARTY_NOTICES.md
+
+nfpms:
+  - id: deb
+    package_name: aidpfs
+    maintainer: 'aidpfs maintainers <derbuihan@users.noreply.github.com>'
+    file_name_template: 'aidpfs_{{ .Version }}_{{ .Arch }}'
+    formats:
+      - deb
+    dependencies:
+      - fuse3
+    section: admin
+    priority: optional
+    contents:
+      - src: README.md
+        dst: /usr/share/doc/aidpfs/README.md
+      - src: LICENSE
+        dst: /usr/share/doc/aidpfs/LICENSE
+      - src: THIRD_PARTY_NOTICES.md
+        dst: /usr/share/doc/aidpfs/THIRD_PARTY_NOTICES.md
+
+checksum:
+  name_template: SHA256SUMS
+  algorithm: sha256
+
+snapshot:
+  version_template: '0.0.0-{{ .ShortCommit }}'
+
+release:
+  disable: true

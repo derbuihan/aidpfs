@@ -108,6 +108,13 @@ Oracle AI Data Platform (AIDP) Workbench の workspace をローカルから操�
 - [ ] **実API/UI/Editor E2E**: 合成Notebookで空・rich・output付き・大きいchunked payloadを保存し、contents GET、export、Workbench UI再open、VS Code open/edit/save/reopenで受け入れ基準を照合する。2 client競合、Workbench autosave、412、timeout/process stop後のjournal保持と復旧を実施し、専用root cleanupを確認する。
 - [ ] **公開範囲の更新**: すべての受け入れ条件が満たされた後、READMEのNotebook read-only記述、CLI help、TASKのexperimental/write scopeを更新し、利用者向けに競合保証と未保証のwriterを明示する。
 
+### 13. GitHub Actions カバレッジと Linux 最新プレリリース
+
+- [ ] **テストカバレッジ**: 既存のCIでrace付きGoテストのcoverage profileを生成し、総カバレッジをActionsの実行結果に表示する。coverage profileも実行ごとのartifactとして保存し、実機AIDP資格情報やFUSE mountを使わずに再現できることを確認する。実機E2EはCI対象にしない。
+- [ ] **Linux配布物**: release設定を追加し、Linux amd64 / arm64向けの実行バイナリを含むtar.gzとDebian/Ubuntu向け`.deb`、SHA-256 checksumsを生成する。README、LICENSE、THIRD_PARTY_NOTICES、version情報、FUSE (`fuse3` / `/dev/fuse`) とOCI profileの前提を同梱・説明し、パッケージの構造・依存関係・checksumをrelease前に検証する。
+- [ ] **最新プレリリースの置換**: mainへのpushで、通常CI成功後に配布物を作成・検証してからGitHub Releaseの旧版を整理し、`latest` のプレリリースを一つだけ公開する。公開物に対象commit、対応platform、checksumを示し、同時実行を直列化する。テスト失敗や成果物検証失敗では既存releaseを削除しない。
+- [ ] **公開後確認**: `latest` が今回のcommit由来のプレリリースであり、GitHub Releasesに古い公開releaseが残らず、tar.gz / `.deb` / checksumsを取得・検証できることを確認する。旧releaseを置換する運用と、失敗時に既存releaseを維持する条件をworkflowに明記する。
+
 ## 完了
 
 - 2026-11-02: `scripts/aidp-write-probe.py` が `/Workspace/Shared` のランダム UUID root のみを作成し、既知の合成 child だけを cleanup することを実 AIDP で検証。正常完了後は root DELETE 204 と親一覧からの消滅を確認。途中の曖昧結果では自動削除を止め、journal と候補を残す。実 AIDP PAR/FUSE の process-kill recovery 試験を含む一連の suite 後も root cleanup 済み。[詳細](docs/20261101_書き込みAPI実測.md)、[復旧](docs/20261101_復旧データ基盤.md)。

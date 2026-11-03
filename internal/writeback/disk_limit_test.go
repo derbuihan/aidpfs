@@ -34,8 +34,17 @@ func TestJournalFileLimitChild(t *testing.T) {
 		}
 		expected = "Xbcd"
 	}
+	var oldLimit syscall.Rlimit
+	if err = syscall.Getrlimit(syscall.RLIMIT_FSIZE, &oldLimit); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if restoreErr := syscall.Setrlimit(syscall.RLIMIT_FSIZE, &oldLimit); restoreErr != nil {
+			t.Errorf("restore file size limit: %v", restoreErr)
+		}
+	}()
 	signal.Ignore(syscall.SIGXFSZ)
-	if err = syscall.Setrlimit(syscall.RLIMIT_FSIZE, &syscall.Rlimit{Cur: 1, Max: 1}); err != nil {
+	if err = syscall.Setrlimit(syscall.RLIMIT_FSIZE, &syscall.Rlimit{Cur: 1, Max: oldLimit.Max}); err != nil {
 		t.Fatal(err)
 	}
 	n, err := buffer.WriteAt([]byte("new"), 0)

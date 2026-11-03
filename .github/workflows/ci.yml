@@ -15,5 +15,58 @@ jobs:
           cache: true
       - run: test -z "$(gofmt -l cmd internal)"
       - run: go vet ./...
-      - run: go test -race ./...
+      - run: go test -race -coverprofile=coverage.out ./...
+      - name: Summarize test coverage
+        run: |
+          go tool cover -func=coverage.out | tee coverage-summary.txt
+          {
+            echo '### Go test coverage'
+            echo '```text'
+            tail -n 1 coverage-summary.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: go-coverage-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            coverage.out
+            coverage-summary.txt
+          if-no-files-found: error
+          retention-days: 30
       - run: go build -o /tmp/aidpfs ./cmd/aidpfs
+
+  release:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    concurrency:
+      group: latest-prerelease
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - uses: goreleaser/goreleaser-action@v7
+        with:
+          version: v2.19.0
+          args: release --snapshot --clean
+      - name: Validate Linux release artifacts
+        run: scripts/verify-release-artifacts.sh
+      - name: Test the native Debian package
+        run: |
+          deb="$(find dist -maxdepth 1 -type f -name 'aidpfs_*_amd64.deb' -print -quit)"
+          test -n "$deb"
+          sudo apt-get update
+          sudo apt-get install -y "./$deb"
+          aidpfs --version
+          sudo apt-get remove -y aidpfs
+      - name: Publish and verify the latest preview
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: scripts/publish-latest-release.sh
