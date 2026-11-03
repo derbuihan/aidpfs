@@ -349,7 +349,7 @@ def main():
                     external_data = base64.b64decode(external_model['content']) if external_model.get('format') == 'base64' else external_model.get('content', '').encode()
                     if external_data != b'aidpfs-vscode-external-update\n':
                         raise RuntimeError('external API update did not persist to the synthetic FILE')
-                    print('VS Code open/search/edit/save/reopen, dirty buffer and unsupported rename/delete verified by signed GET', flush=True)
+                    print('VS Code edit/save, held-handle rejection and closed FILE rename/delete verified; saved data checked by signed GET', flush=True)
                 if a.vim_check:
                     vim_target = os.path.join(write_mount_dir, 'vim-fixture.txt')
                     path_stat = os.stat(vim_target)
@@ -385,11 +385,15 @@ def main():
                     raise RuntimeError('exclusive duplicate creation succeeded')
                 except FileExistsError:
                     pass
-                intent_files = [name for name in os.listdir(recovery_dir) if name.startswith('create-') and name.endswith('.json')]
+                intent_files = []
+                for name in os.listdir(recovery_dir):
+                    if name.startswith('create-') and name.endswith('.json'):
+                        with open(os.path.join(recovery_dir, name)) as intent_file:
+                            item = json.load(intent_file)
+                        if item.get('remote_path') == created_path: intent_files.append((name, item))
                 if len(intent_files) != 1: raise RuntimeError('create intent count mismatch')
-                with open(os.path.join(recovery_dir, intent_files[0])) as intent_file:
-                    intent = json.load(intent_file)
-                if intent.get('remote_path') != created_path or not os.path.isfile(os.path.join(recovery_dir, intent_files[0][:-5] + '.done')):
+                intent_name, intent = intent_files[0]
+                if intent.get('remote_path') != created_path or not os.path.isfile(os.path.join(recovery_dir, intent_name[:-5] + '.done')):
                     raise RuntimeError('confirmed create intent missing')
                 diagnostic = subprocess.run([a.write_mount_binary, 'recovery', 'inspect-create', '--dir', recovery_dir,
                     '--id', intent['id'], '--region', a.region, '--profile', a.profile, '--endpoint', a.endpoint],
@@ -476,14 +480,18 @@ def main():
                 child_data = base64.b64decode(model['content']) if model.get('format') == 'base64' else model['content'].encode()
                 if child_data != b'Nested-synthetic+!': raise RuntimeError('nested file mismatch')
                 print('write-enabled CLI append flag changes preserved write positions', flush=True)
-                for operation, target in ((os.unlink, os.path.join(write_mount_dir, 'cli-dir', 'child.bin')),
-                                          (os.rmdir, os.path.join(write_mount_dir, 'cli-dir'))):
+                with open(os.path.join(write_mount_dir, 'cli-dir', 'child.bin'), 'rb'):
                     try:
-                        operation(target)
-                        raise RuntimeError('unsupported FUSE delete unexpectedly succeeded')
+                        os.unlink(os.path.join(write_mount_dir, 'cli-dir', 'child.bin'))
+                        raise RuntimeError('open file unlink unexpectedly succeeded')
                     except OSError as exc:
-                        if exc.errno != errno.EOPNOTSUPP: raise
-                print('write-enabled CLI unlink and rmdir refused', flush=True)
+                        if exc.errno != errno.EBUSY: raise
+                try:
+                    os.rmdir(os.path.join(write_mount_dir, 'cli-dir'))
+                    raise RuntimeError('unsupported FUSE rmdir unexpectedly succeeded')
+                except OSError as exc:
+                    if exc.errno != errno.EOPNOTSUPP: raise
+                print('write-enabled CLI open unlink and rmdir refused', flush=True)
                 if {item.get('path') for item in listing(created_dir)} != {child_path}: raise RuntimeError('unexpected nested directory contents')
                 child_intents = []
                 for name in os.listdir(recovery_dir):
@@ -491,8 +499,8 @@ def main():
                         with open(os.path.join(recovery_dir, name)) as f: item = json.load(f)
                         if item.get('remote_path') == child_path and item.get('kind') == 'FILE': child_intents.append(item)
                 if len(child_intents) != 1: raise RuntimeError('nested file intent missing')
-                removed = request('DELETE', contents(child_path))
-                if removed.status_code != 204 or listing(created_dir): raise RuntimeError('nested child cleanup failed')
+                os.unlink(os.path.join(write_mount_dir, 'cli-dir', 'child.bin'))
+                if listing(created_dir): raise RuntimeError('nested child cleanup failed')
                 diagnostic = subprocess.run([a.write_mount_binary, 'recovery', 'inspect-create', '--dir', recovery_dir,
                     '--id', child_intents[0]['id'], '--region', a.region, '--profile', a.profile, '--endpoint', a.endpoint],
                     capture_output=True, text=True, timeout=60)

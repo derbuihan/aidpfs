@@ -1,7 +1,9 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -10,6 +12,7 @@ import (
 	"syscall"
 
 	"aidpfs/internal/aidp"
+	"aidpfs/internal/backend"
 	"aidpfs/internal/config"
 	"aidpfs/internal/mount"
 	"aidpfs/internal/recovery"
@@ -29,7 +32,7 @@ func run() error {
 	flag.StringVar(&c.RemotePath, "remote-path", "", "absolute workspace subtree")
 	flag.StringVar(&c.MountPoint, "mount-point", "", "absolute local mount directory")
 	showVersion := flag.Bool("version", false, "print version")
-	writeEnabled := flag.Bool("write", false, "enable FILE writes; Notebook write, rename, and delete are unsupported")
+	writeEnabled := flag.Bool("write", false, "enable single-writer FILE writes, limited rename and unlink")
 	recoveryDir := flag.String("recovery-dir", "", "existing private recovery directory (required with --write)")
 	flag.Parse()
 	if *showVersion {
@@ -69,13 +72,18 @@ func run() error {
 		}
 		defer lock.Close()
 		journal = store
-		writeMount, err = mount.MountExperimental(context.Background(), c.MountPoint, r, func(ctx context.Context, rel string) (*writeback.Buffer, error) {
+		mutate := func(ctx context.Context, operation, source, destination string) error {
+			return journalMutation(ctx, store, c, operation, source, destination, func(ctx context.Context, op, src, dst string) error {
+				return verifiedMutation(ctx, r, op, src, dst)
+			})
+		}
+		writeMount, err = mount.MountWithMutations(context.Background(), c.MountPoint, r, func(ctx context.Context, rel string) (*writeback.Buffer, error) {
 			return r.OpenExperimentalBuffer(ctx, rel, c.Region, store)
 		}, func(ctx context.Context, rel string) error {
 			return journalCreate(ctx, store, c, rel, "FILE", r.CreateEmptyExperimental)
 		}, func(ctx context.Context, rel string) error {
 			return journalCreate(ctx, store, c, rel, "FOLDER", r.CreateDirectoryExperimental)
-		})
+		}, mutate)
 		if err == nil {
 			server = writeMount.Server
 		}
@@ -94,6 +102,62 @@ func run() error {
 		return checkRecoveryAfterUnmount(writeMount.Pending(), journal)
 	}
 	return nil
+}
+
+type mutationReader interface {
+	ReadFile(context.Context, string) ([]byte, error)
+	ListedKind(context.Context, string) (backend.Kind, error)
+	MutateFile(context.Context, string, string, string) error
+}
+
+func verifiedMutation(ctx context.Context, r mutationReader, op, src, dst string) error {
+	var before []byte
+	var err error
+	if op == "rename" {
+		before, err = r.ReadFile(ctx, src)
+		if err != nil {
+			return err
+		}
+	}
+	if err = r.MutateFile(ctx, op, src, dst); err != nil {
+		return err
+	}
+	if _, err = r.ListedKind(ctx, src); !errors.Is(err, syscall.ENOENT) {
+		return aidp.ErrOutcomeUnknown
+	}
+	if op == "rename" {
+		kind, e := r.ListedKind(ctx, dst)
+		if e != nil || kind != backend.File {
+			return aidp.ErrOutcomeUnknown
+		}
+		after, e := r.ReadFile(ctx, dst)
+		if e != nil || !bytes.Equal(before, after) {
+			return aidp.ErrOutcomeUnknown
+		}
+	}
+	return nil
+}
+
+func journalMutation(ctx context.Context, store *recovery.Store, c config.Config, operation, source, destination string, mutate func(context.Context, string, string, string) error) error {
+	remote, err := config.Resolve(c.RemotePath, source)
+	if err != nil {
+		return err
+	}
+	target := ""
+	if destination != "" {
+		target, err = config.Resolve(c.RemotePath, destination)
+		if err != nil {
+			return err
+		}
+	}
+	id, err := store.BeginMutation(c.PlatformID, c.WorkspaceKey, operation, remote, target)
+	if err != nil {
+		return err
+	}
+	if err = mutate(ctx, operation, source, destination); err != nil {
+		return err
+	}
+	return store.ConfirmMutation(id)
 }
 
 func journalCreate(ctx context.Context, store *recovery.Store, c config.Config, rel, kind string, create func(context.Context, string) error) error {
@@ -147,8 +211,17 @@ func checkRecoveryAfterUnmount(pending int, journal *recovery.Store) error {
 			unknown++
 		}
 	}
+	mutations, err := journal.ListMutations()
+	if err != nil {
+		return fmt.Errorf("cannot inspect mutation intents after unmount: %w", err)
+	}
+	for _, intent := range mutations {
+		if intent.Invalid || !intent.Confirmed {
+			unknown++
+		}
+	}
 	if pending != 0 || unknown != 0 || len(unresolved) != 0 {
-		return fmt.Errorf("recovery required: %d unsaved file buffers, %d unresolved snapshots, %d unconfirmed or invalid create intents; inspect --recovery-dir", pending, len(unresolved), unknown)
+		return fmt.Errorf("recovery required: %d unsaved file buffers, %d unresolved snapshots, %d unconfirmed or invalid operation intents; inspect --recovery-dir", pending, len(unresolved), unknown)
 	}
 	return nil
 }

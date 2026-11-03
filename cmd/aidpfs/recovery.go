@@ -20,7 +20,7 @@ import (
 
 func runRecovery(args []string, out io.Writer) error {
 	if len(args) == 0 {
-		return errors.New("usage: aidpfs recovery list|lineage|export|inspect|inspect-create [flags]")
+		return errors.New("usage: aidpfs recovery list|lineage|export|inspect|inspect-create|inspect-mutation [flags]")
 	}
 	command := args[0]
 	fs := flag.NewFlagSet("recovery "+command, flag.ContinueOnError)
@@ -63,6 +63,15 @@ func runRecovery(args []string, out io.Writer) error {
 		}
 		enc := json.NewEncoder(out)
 		for _, item := range creates {
+			if err = enc.Encode(item); err != nil {
+				return err
+			}
+		}
+		mutations, err := store.ListMutations()
+		if err != nil {
+			return err
+		}
+		for _, item := range mutations {
 			if err = enc.Encode(item); err != nil {
 				return err
 			}
@@ -141,6 +150,70 @@ func runRecovery(args []string, out io.Writer) error {
 			}
 		}
 		fmt.Fprintf(out, "confirmed=%t observation=%s (point-in-time; no create replayed)\n", selected.Confirmed, observation)
+		return nil
+	case "inspect-mutation":
+		if *id == "" || *region == "" || *output != "" {
+			return errors.New("inspect-mutation requires --id and --region")
+		}
+		intents, err := store.ListMutations()
+		if err != nil {
+			return err
+		}
+		var selected *recovery.MutationIntent
+		for i := range intents {
+			if intents[i].ID == *id {
+				selected = &intents[i]
+				break
+			}
+		}
+		if selected == nil || selected.Invalid {
+			return errors.New("mutation intent not found or invalid")
+		}
+		service := *endpoint
+		if service == "" {
+			service = "https://aidp." + *region + ".oci.oraclecloud.com"
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		defer cancel()
+		observe := func(remote string) (string, error) {
+			root := path.Dir(remote)
+			if root == "/" {
+				return "", errors.New("root-level target is not supported")
+			}
+			r, err := aidp.New(service, selected.PlatformID, selected.WorkspaceKey, root, aidp.APIKeySigner(os.Getenv("OCI_CONFIG_FILE"), *profile))
+			if err != nil {
+				return "", err
+			}
+			kind, err := r.ListedKind(ctx, path.Base(remote))
+			if errors.Is(err, syscall.ENOENT) {
+				return "not_listed", nil
+			}
+			if err != nil {
+				return "", err
+			}
+			switch kind {
+			case backend.File:
+				return "file_listed", nil
+			case backend.Directory:
+				return "directory_listed", nil
+			case backend.Notebook:
+				return "notebook_listed", nil
+			default:
+				return "", syscall.EIO
+			}
+		}
+		source, err := observe(selected.Source)
+		if err != nil {
+			return err
+		}
+		destination := "none"
+		if selected.Destination != "" {
+			destination, err = observe(selected.Destination)
+			if err != nil {
+				return err
+			}
+		}
+		fmt.Fprintf(out, "operation=%s confirmed=%t source=%s destination=%s (separate point-in-time observations; no operation replayed)\n", selected.Operation, selected.Confirmed, source, destination)
 		return nil
 	case "inspect":
 		if *id == "" || *region == "" || *output != "" {

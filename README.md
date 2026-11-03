@@ -2,7 +2,7 @@
 
 `aidpfs` is an experimental Linux FUSE filesystem for reading one Oracle AI Data Platform (AIDP) Workbench workspace subtree. It uses the WorkspaceObject and notebook contents APIs with OCI API-key authentication. The supported scope and verification status are tracked in [TASK.md](TASK.md).
 
-**The default mount is read-only.** An explicitly enabled write mode supports regular FILE creation and modification and directory creation. Rename, deletion and Notebook saving remain unsupported. FILE updates use conditional Object Storage PAR transfers; the tested AIDP contents and WorkspaceObject APIs accepted an incorrect `if-match`, so their headers are not treated as conflict protection.
+**The default mount is read-only.** Write mode supports regular FILE creation, modification, unlink and limited rename, plus directory creation. Notebook saving and directory deletion remain unsupported. FILE updates use conditional Object Storage PAR transfers; the tested AIDP contents and WorkspaceObject APIs accepted an incorrect `if-match`, so their headers are not treated as conflict protection.
 
 ## Requirements
 
@@ -61,7 +61,9 @@ Unmount in a second terminal with `fusermount3 -u "$HOME/aidp-mount"`, or stop t
 
 ## FILE writes
 
-The default mount remains read-only. To enable the supported FILE and directory operations, create a private, empty journal directory and pass `--write --recovery-dir /absolute/private/directory`; both options are required together. Notebook writes, rename, unlink and rmdir remain unsupported and return `EOPNOTSUPP` in write mode. Keep the journal private because it contains file contents and recovery metadata.
+The default mount remains read-only. To enable the supported FILE and directory operations, create a private, empty journal directory and pass `--write --recovery-dir /absolute/private/directory`; both options are required together. Notebook writes and `rmdir` remain unsupported. Keep the journal private because it contains file contents and recovery metadata.
+
+**Rename and unlink require exclusive use of the affected workspace subtree.** Do not use another mount, Workbench, or another API client to modify it concurrently. The tested AIDP endpoints did not enforce `if-match`; a type or identity check before a request cannot prevent another client from replacing the target before deletion. This requirement is not enforced by a distributed lock. Rename supports a regular FILE only when the destination does not exist; replacement and rename flags are rejected. Rename or unlink of an open FUSE handle or unsaved FUSE buffer returns `EBUSY`. Editors may keep unsaved changes in their own memory after closing their FUSE handle; aidpfs cannot detect those buffers. Save and close such documents before renaming or deleting them. Folder and Notebook mutations are rejected. These restrictions are narrower than POSIX semantics and some editor save strategies will fail.
 
 The write path is designed for single-user, single-mount FILE updates. It creates files without overwriting existing paths, journals create intent before making a remote request, and edits existing FILEs through a conditional Object Storage PAR upload followed by AIDP metadata completion and independent content verification. Unknown outcomes are never automatically retried. Conflicts or uncertain saves freeze the affected buffer and retain journal data for manual inspection. `fsync` reports the save result; close does not save or report a previous failure. Successful verification confirms the bytes at that version during the check, but does not lock out later updates from another client.
 
@@ -74,9 +76,11 @@ The implementation has a 64 MiB file limit and keeps each open file in memory. D
 | `fsync` / synchronous write | Supported | Returns success after conditional PAR transfer, metadata completion and version/content verification. |
 | `flush` | Supported | Each writable flush attempts the same save path and returns its error. |
 | `release` / close | Handle release only | Does not start network I/O. Check `fsync` explicitly. |
-| `unlink`, `rmdir`, `rename` | `EOPNOTSUPP` | AIDP delete/move did not provide a safe conditional operation in the tested environment. |
+| `unlink` | Supported for closed, clean FILEs | Single-writer only; an operation intent is retained and a successful response is followed by a parent listing check. |
+| `rename` | Supported for closed, clean FILEs with absent destination | Same or different directory; no destination replacement or rename flags. Single-writer only. Success includes source/destination listing and content checks. |
+| `rmdir`, folder/Notebook mutation | Rejected | Conditional and non-recursive behavior is not established; a directory passed to unlink/rename returns `EISDIR`. |
 | chmod, chown, timestamp changes | `EOPNOTSUPP` | AIDP does not expose these POSIX metadata operations. |
-| Open then unlink | `EOPNOTSUPP` | The open handle and path remain usable because unlink is refused. |
+| Open then unlink or rename | `EBUSY` | Close all handles and resolve dirty buffers first. |
 | `forget` | Internal FUSE reference bookkeeping | Does not modify AIDP or recovery data. |
 | POSIX advisory locks | Kernel-local only | Does not coordinate with Workbench, other mounts, or clients. |
 | `statfs` | `EOPNOTSUPP` | AIDP capacity and quota are unavailable. |
@@ -85,7 +89,9 @@ The read-only mount rejects write access, `O_TRUNC`, and `O_APPEND` with `EROFS`
 
 AIDP contents and WorkspaceObject endpoints accepted wrong `if-match` values in the tested environment. Conditional Object Storage PAR upload rejected stale `If-Match` with HTTP 412; two concurrent uploads produced one accepted update and one conflict. Workbench and a REST client can still overwrite each other without detecting the conflict, so write mode is scoped to a single writer. `opc-retry-token` replay returned HTTP 500 on the tested create route while leaving one object and its payload intact; the implementation does not depend on retry-token replay or retry uncertain POSTs.
 
-The write mount reuses a live FUSE inode for repeated lookups of the same path and type. This is not a verified AIDP object identity: an external delete and recreation may not be distinguishable. The AIDP-specific VS Code E2E tested open, search, edit, save, reopen, dirty buffer preservation, unsupported rename/delete, and an external update observed after reopening. Ordinary editor settings and multi-user use remain outside the tested contract.
+The write mount reuses a live FUSE inode for repeated lookups of the same path and type. This is not a verified AIDP object identity: an external delete and recreation may not be distinguishable. The AIDP-specific VS Code E2E tested open, search, edit, save, reopen, dirty buffer preservation, rejection with an open FUSE handle, closed FILE rename/delete, and an external update observed after reopening. Ordinary editor settings and multi-user use remain outside the tested contract.
+
+For rename and unlink, an operation intent is synced before one API request. If a request or its verification fails, the mount rejects subsequent create, mkdir, open, truncate, rename and unlink operations until unmounted; inspect the journal and remote paths rather than retrying blindly. A success response and readback are observations, not a lock or proof against later changes. An unsuccessful request may also leave an unconfirmed intent even when the server returned a definite error.
 
 After the FUSE server stops, the CLI drains already entered operations and reports unresolved dirty buffers, invalid journal records or unconfirmed create intents. Prepared ancestors of a validated verified snapshot are treated as completed history; other branches remain unresolved. Check each write and `fsync` result. The recovery commands below inspect retained entries and export verified content without replaying or deleting journals.
 
@@ -97,6 +103,8 @@ The write-enabled mount retains local recovery entries; the default read-only mo
 ./aidpfs recovery list --dir /absolute/private/recovery-directory
 ./aidpfs recovery inspect-create --dir /absolute/private/recovery-directory \
   --id CREATE_INTENT_ID --region REGION --profile OCI_PROFILE
+./aidpfs recovery inspect-mutation --dir /absolute/private/recovery-directory \
+  --id MUTATION_INTENT_ID --region REGION --profile OCI_PROFILE
 ./aidpfs recovery lineage --dir /absolute/private/recovery-directory --id ENTRY_ID
 ./aidpfs recovery export --dir /absolute/private/recovery-directory \
   --id ENTRY_ID --output /absolute/new/recovered-file
@@ -110,6 +118,8 @@ To compare an entry with a current remote version, run:
 ```
 
 `inspect-create` checks the current parent listing and reports whether the target was listed as a file, directory or notebook, or was `not_listed`. This observation does not prove who created an object, whether the recorded request succeeded, or what happens after inspection. The ordinary `inspect` command generates a download PAR, compares a version-bound remote snapshot, and reports `base_version`, `uploaded_version`, `content_match_unknown_version`, or `remote_changed`. Matching content alone does not establish which client wrote it, and an uploaded version does not prove metadata completion or prevent a later change. Neither command replays a write. If the target is inaccessible or the version changes during inspection, inspection fails and the journal remains intact.
+
+`inspect-mutation` reports source and destination parent-listing observations separately. They are not an atomic snapshot and do not prove which client performed the operation. Inspect the target contents and any other relevant evidence before manual recovery; the command never repeats the mutation.
 
 Lineage validates the selected entry and its ancestors, including their contents, target and generation. It does not establish that the selected entry is the newest: other branches or incomplete entries may exist. Avoid changing the recovery directory during inspection. Export creates a 0600 file, refuses to overwrite an existing path, and leaves the journal intact. `incomplete-or-invalid` entries cannot be exported by this command; retain their directory for manual investigation. The journal contains file data and target metadata, so protect it accordingly. Entries at `put_started` or `update_started` can represent an unknown remote outcome; inspect the remote state before taking further action. These commands do not automatically replay or delete a journal.
 

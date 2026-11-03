@@ -15,7 +15,7 @@ suite('AIDPFS mounted workspace', () => {
   const externalFile = externalRel ? path.join(root, externalRel) : '';
   const uri = vscode.Uri.file(file);
 
-  test('open, search, edit, save, reopen, preserve dirty buffer, and reject rename/delete', async () => {
+  test('open, edit, preserve dirty buffer, and rename/delete a closed FILE', async () => {
     const initial = await fs.readFile(file, 'utf8');
     assert.ok(initial.includes('aidpfs-vscode-seed'));
     const found = await vscode.workspace.findFiles('**/*.txt', '**/.vscode/**');
@@ -62,12 +62,25 @@ suite('AIDPFS mounted workspace', () => {
     assert.strictEqual(reopened.isDirty, true);
     assert.ok(reopened.getText().includes('aidpfs-vscode-dirty'));
 
-    await assert.rejects(() => Promise.resolve(vscode.workspace.fs.rename(uri, vscode.Uri.file(`${file}.renamed`))));
-    await assert.rejects(() => Promise.resolve(vscode.workspace.fs.delete(uri)));
+    const held = await fs.open(file, 'r');
+    try {
+      await assert.rejects(() => Promise.resolve(vscode.workspace.fs.rename(uri, vscode.Uri.file(`${file}.renamed`))));
+      await assert.rejects(() => Promise.resolve(vscode.workspace.fs.delete(uri)));
+    } finally {
+      await held.close();
+    }
     assert.ok((await fs.readFile(file, 'utf8')).includes('aidpfs-vscode-saved'));
     assert.strictEqual(reopened.isDirty, true);
     reopened.isDirty && await vscode.workspace.fs.writeFile(uri, Buffer.from(reopened.getText()));
     await reopened.save();
     assert.strictEqual(await fs.readFile(file, 'utf8'), reopened.getText());
+
+    const mutation = vscode.Uri.file(path.join(root, 'vscode-mutation-fixture.txt'));
+    const renamed = vscode.Uri.file(path.join(root, 'vscode-mutation-renamed.txt'));
+    await vscode.workspace.fs.writeFile(mutation, Buffer.from('vscode mutation fixture\n'));
+    await vscode.workspace.fs.rename(mutation, renamed, { overwrite: false });
+    assert.strictEqual(Buffer.from(await vscode.workspace.fs.readFile(renamed)).toString(), 'vscode mutation fixture\n');
+    await vscode.workspace.fs.delete(renamed);
+    await assert.rejects(() => Promise.resolve(vscode.workspace.fs.stat(renamed)));
   });
 });
