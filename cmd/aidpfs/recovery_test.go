@@ -60,6 +60,69 @@ func TestRecoveryCommands(t *testing.T) {
 	}
 }
 
+func TestRecoveryCommandRejectsInvalidArguments(t *testing.T) {
+	d := t.TempDir()
+	if err := os.Chmod(d, 0700); err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		name string
+		args []string
+	}{
+		{name: "missing command"},
+		{name: "unknown flag", args: []string{"list", "--dir", d, "--unknown"}},
+		{name: "positional argument", args: []string{"list", "--dir", d, "extra"}},
+		{name: "list rejects inspect flags", args: []string{"list", "--dir", d, "--id", "entry"}},
+		{name: "lineage requires id", args: []string{"lineage", "--dir", d}},
+		{name: "export requires output", args: []string{"export", "--dir", d, "--id", "entry"}},
+		{name: "inspect requires region", args: []string{"inspect", "--dir", d, "--id", "entry"}},
+		{name: "inspect-create requires region", args: []string{"inspect-create", "--dir", d, "--id", "entry"}},
+		{name: "unknown command", args: []string{"repair", "--dir", d}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var out bytes.Buffer
+			if err := runRecovery(tc.args, &out); err == nil {
+				t.Fatalf("runRecovery(%v) succeeded", tc.args)
+			}
+		})
+	}
+}
+
+func TestRecoveryInspectRejectsRootLevelTargets(t *testing.T) {
+	d := t.TempDir()
+	if err := os.Chmod(d, 0700); err != nil {
+		t.Fatal(err)
+	}
+	store, err := recovery.Open(d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fileID, err := store.Create("platform", "workspace", "/file", "etag", []byte("synthetic"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	createID, err := store.BeginCreate("platform", "workspace", "/new")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name string
+		args []string
+	}{
+		{name: "inspect", args: []string{"inspect", "--dir", d, "--id", fileID, "--region", "ap-osaka-1"}},
+		{name: "inspect-create", args: []string{"inspect-create", "--dir", d, "--id", createID, "--region", "ap-osaka-1"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var out bytes.Buffer
+			err := runRecovery(tc.args, &out)
+			if err == nil || !strings.Contains(err.Error(), "root-level target is not supported") {
+				t.Fatalf("runRecovery error = %v, want root-level target rejection", err)
+			}
+		})
+	}
+}
+
 func TestRecoveryAfterUnmountReportsPendingWork(t *testing.T) {
 	d := t.TempDir()
 	if err := os.Chmod(d, 0700); err != nil {

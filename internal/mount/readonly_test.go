@@ -23,6 +23,16 @@ type fake struct {
 	modified  time.Time
 }
 
+type directoryListingFake struct {
+	*fake
+	entries []backend.Metadata
+	listErr error
+}
+
+func (f *directoryListingFake) ReadDir(context.Context, string) ([]backend.Metadata, error) {
+	return append([]backend.Metadata(nil), f.entries...), f.listErr
+}
+
 func (f *fake) Stat(_ context.Context, p string) (backend.Metadata, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -189,6 +199,78 @@ func TestSnapshotBounds(t *testing.T) {
 	b, status := r.Bytes(nil)
 	if status != 0 || string(b) != "c" {
 		t.Fatalf("%q %v", b, status)
+	}
+}
+
+func TestReadonlyReaddirSortsEntriesAndMapsErrors(t *testing.T) {
+	reader := &directoryListingFake{
+		fake: &fake{},
+		entries: []backend.Metadata{
+			{Name: "z-dir", Kind: backend.Directory},
+			{Name: "a-file", Kind: backend.File},
+		},
+	}
+	stream, errno := (&node{reader: reader}).Readdir(context.Background())
+	if errno != 0 || stream == nil {
+		t.Fatalf("Readdir stream=%v errno=%v", stream, errno)
+	}
+	defer stream.Close()
+	var names []string
+	var modes []uint32
+	for stream.HasNext() {
+		entry, entryErrno := stream.Next()
+		if entryErrno != 0 {
+			t.Fatalf("next entry errno=%v", entryErrno)
+		}
+		names = append(names, entry.Name)
+		modes = append(modes, entry.Mode&syscall.S_IFMT)
+	}
+	if len(names) != 2 || names[0] != "a-file" || names[1] != "z-dir" {
+		t.Fatalf("directory order = %v", names)
+	}
+	if modes[0] != syscall.S_IFREG || modes[1] != syscall.S_IFDIR {
+		t.Fatalf("directory entry modes = %#o", modes)
+	}
+
+	reader.listErr = context.Canceled
+	if stream, errno = (&node{reader: reader}).Readdir(context.Background()); stream != nil || errno != syscall.EINTR {
+		t.Fatalf("cancelled Readdir stream=%v errno=%v, want EINTR", stream, errno)
+	}
+}
+
+func TestExperimentalReaddirSortsEntriesAndMapsErrors(t *testing.T) {
+	reader := &directoryListingFake{
+		fake: &fake{},
+		entries: []backend.Metadata{
+			{Name: "z-dir", Kind: backend.Directory},
+			{Name: "a-file", Kind: backend.File},
+		},
+	}
+	stream, errno := (&experimentalNode{reader: reader}).Readdir(context.Background())
+	if errno != 0 || stream == nil {
+		t.Fatalf("Readdir stream=%v errno=%v", stream, errno)
+	}
+	defer stream.Close()
+	var names []string
+	var modes []uint32
+	for stream.HasNext() {
+		entry, entryErrno := stream.Next()
+		if entryErrno != 0 {
+			t.Fatalf("next entry errno=%v", entryErrno)
+		}
+		names = append(names, entry.Name)
+		modes = append(modes, entry.Mode&syscall.S_IFMT)
+	}
+	if len(names) != 2 || names[0] != "a-file" || names[1] != "z-dir" {
+		t.Fatalf("directory order = %v", names)
+	}
+	if modes[0] != syscall.S_IFREG || modes[1] != syscall.S_IFDIR {
+		t.Fatalf("directory entry modes = %#o", modes)
+	}
+
+	reader.listErr = context.Canceled
+	if stream, errno = (&experimentalNode{reader: reader}).Readdir(context.Background()); stream != nil || errno != syscall.EINTR {
+		t.Fatalf("cancelled Readdir stream=%v errno=%v, want EINTR", stream, errno)
 	}
 }
 
