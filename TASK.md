@@ -110,14 +110,14 @@ Oracle AI Data Platform (AIDP) Workbench の workspace をローカルから操�
 
 ### 13. GitHub Actions カバレッジと Linux 最新プレリリース
 
-- [ ] **テストカバレッジ**: 既存のCIでrace付きGoテストのcoverage profileを生成し、総カバレッジをActionsの実行結果に表示する。coverage profileも実行ごとのartifactとして保存し、実機AIDP資格情報やFUSE mountを使わずに再現できることを確認する。実機E2EはCI対象にしない。
-- [ ] **Linux配布物**: release設定を追加し、Linux amd64 / arm64向けの実行バイナリを含むtar.gzとDebian/Ubuntu向け`.deb`、SHA-256 checksumsを生成する。README、LICENSE、THIRD_PARTY_NOTICES、version情報、FUSE (`fuse3` / `/dev/fuse`) とOCI profileの前提を同梱・説明し、パッケージの構造・依存関係・checksumをrelease前に検証する。
-- [ ] **最新プレリリースの置換**: mainへのpushで、通常CI成功後に配布物を作成・検証してからGitHub Releaseの旧版を整理し、`latest` のプレリリースを一つだけ公開する。公開物に対象commit、対応platform、checksumを示し、同時実行を直列化する。テスト失敗や成果物検証失敗では既存releaseを削除しない。
-- [ ] **公開後確認**: `latest` が今回のcommit由来のプレリリースであり、GitHub Releasesに古い公開releaseが残らず、tar.gz / `.deb` / checksumsを取得・検証できることを確認する。旧releaseを置換する運用と、失敗時に既存releaseを維持する条件をworkflowに明記する。
+- [x] **テストカバレッジ**: race付きGo testsでcoverage profileを生成し、Actions summaryに総coverageを表示。profileとsummaryをrunごとの30日artifactとして保存。実機AIDP資格情報・FUSE mountなしでActions run 41562189366 / 41562421233 が成功し、coverageは68.3%。実機E2EはCIに含めない。
+- [x] **Linux配布物**: GoReleaserでLinux amd64 / arm64の実行バイナリ入りtar.gz、Debian/Ubuntu向け`.deb`、SHA256SUMSを作成。README・LICENSE・THIRD_PARTY_NOTICES、version、fuse3依存と`/dev/fuse`・OCI profile前提を同梱・説明し、構造・依存・checksumを検証。Actions runner上でamd64 `.deb` のinstall/version/removeも成功。
+- [x] **最新プレリリースの置換**: main pushでテスト成功後に生成・検証し、直列化したrelease jobが古い公開releaseを整理して`latest` prereleaseを作成。immutable releaseが存在する場合は削除前に中断する。初回と置換後の公開をActions run 41562189366 / 41562421233で確認。
+- [x] **公開後確認**: `latest` は置換を発生させた最新main commitを指す唯一の公開release。GitHubからtar.gz 2件、`.deb` 2件、SHA256SUMSをdownloadし、4成果物のchecksumを再検証。READMEにmoving previewの更新・旧版置換運用を記載。[latest release](https://github.com/derbuihan/aidpfs/releases/tag/latest)。
 
 ## 完了
 
-- 2026-11-03: GitHub Actions に race 付き coverage profile / summary / artifact 保存を追加し、main の初回 run `41562189366`（commit `1c92876`）で成功。summary と取得した artifact はどちらも総 coverage 68.3%。GoReleaser の snapshot で Linux amd64 / arm64 の tar.gz、`.deb`、SHA256SUMS を生成し、構造・依存・checksum検証と Ubuntu runner 上の amd64 package install を通過。`latest` pre-release を初回公開し、全5 assetsをGitHubからdownloadしてSHA-256を再検証、公開releaseが1件でtagが対象commitを指すことを確認。既存releaseを置換する次回pushの実行確認は継続中。[Actions run](https://github.com/derbuihan/aidpfs/actions/runs/41562189366)、[latest release](https://github.com/derbuihan/aidpfs/releases/tag/latest)。
+- 2026-11-03: GitHub Actions run `41562189366`（初回公開）と`41562421233`（既存`latest`の置換）が両方成功。race付き全Go testsのcoverageは68.3%でsummary表示・profile artifact取得を確認。Linux amd64 / arm64のtar.gzと`.deb`、SHA256SUMSを生成し、成果物・依存・checksum検証とUbuntu runner上のamd64 package install/version/removeを通過。2回目のpush後も公開releaseは`latest` 1件だけで、今回commitを指すことを確認。GitHubから5 assetsを取得し、4配布物のchecksumを再検証。[初回Actions run](https://github.com/derbuihan/aidpfs/actions/runs/41562189366)、[置換Actions run](https://github.com/derbuihan/aidpfs/actions/runs/41562421233)、[latest release](https://github.com/derbuihan/aidpfs/releases/tag/latest)。
 
 - 2026-11-02: `scripts/aidp-write-probe.py` が `/Workspace/Shared` のランダム UUID root のみを作成し、既知の合成 child だけを cleanup することを実 AIDP で検証。正常完了後は root DELETE 204 と親一覧からの消滅を確認。途中の曖昧結果では自動削除を止め、journal と候補を残す。実 AIDP PAR/FUSE の process-kill recovery 試験を含む一連の suite 後も root cleanup 済み。[詳細](docs/20261101_書き込みAPI実測.md)、[復旧](docs/20261101_復旧データ基盤.md)。
 
