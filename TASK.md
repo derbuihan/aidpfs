@@ -117,6 +117,8 @@ Oracle AI Data Platform (AIDP) Workbench の workspace をローカルから操�
 
 ## 完了
 
+- 2026-11-03: GitHub Actions に race 付き coverage profile / summary / artifact 保存を追加し、main の初回 run `41562189366`（commit `1c92876`）で成功。summary と取得した artifact はどちらも総 coverage 68.3%。GoReleaser の snapshot で Linux amd64 / arm64 の tar.gz、`.deb`、SHA256SUMS を生成し、構造・依存・checksum検証と Ubuntu runner 上の amd64 package install を通過。`latest` pre-release を初回公開し、全5 assetsをGitHubからdownloadしてSHA-256を再検証、公開releaseが1件でtagが対象commitを指すことを確認。既存releaseを置換する次回pushの実行確認は継続中。[Actions run](https://github.com/derbuihan/aidpfs/actions/runs/41562189366)、[latest release](https://github.com/derbuihan/aidpfs/releases/tag/latest)。
+
 - 2026-11-02: `scripts/aidp-write-probe.py` が `/Workspace/Shared` のランダム UUID root のみを作成し、既知の合成 child だけを cleanup することを実 AIDP で検証。正常完了後は root DELETE 204 と親一覧からの消滅を確認。途中の曖昧結果では自動削除を止め、journal と候補を残す。実 AIDP PAR/FUSE の process-kill recovery 試験を含む一連の suite 後も root cleanup 済み。[詳細](docs/20261101_書き込みAPI実測.md)、[復旧](docs/20261101_復旧データ基盤.md)。
 
 - 2026-11-02: Workbench `sandbox` UI で専用 synthetic notebook の未実行 cell を編集。手動保存なしの状態で別 client から同じ Notebook へ REST PUT が 200。次の Workbench 周期保存後、UI は「Last saved at」が進み、signed contents API は UI に残っていた stale marker を返した (HTTP 200)。REST client の変更が失われても UI / API は成功を表示し、version/conflict 検出はなかった。この合成データで「Workbench auto-save と外部更新の競合」は再現した。別 notebook でも周期保存後の signed GET は成功。probe は marker / bytes を出力しない。既存 notebook の outputs / metadata 保持は未確認。合成 folder は削除確認で保留中。[詳細](docs/20261101_書き込みAPI実測.md)、[test](internal/aidp/reader_live_test.go)。
