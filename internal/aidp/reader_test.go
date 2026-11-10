@@ -349,3 +349,47 @@ func TestSignerErrorIsRedacted(t *testing.T) {
 type failingSigner struct{}
 
 func (failingSigner) Sign(*http.Request) error { return errors.New("sensitive signing material") }
+
+// The tested tenant reports an extension-less FILE as a directory for
+// content=0 and returns HTTP 400 for content=1 unless type=file is requested;
+// notebooks must not be sent that type.
+func TestListedFileContentRequestsFileType(t *testing.T) {
+	r := serverReader(t, func(w http.ResponseWriter, req *http.Request) {
+		if strings.HasSuffix(req.URL.Path, "/objects") {
+			fmt.Fprint(w, `{"items":[{"displayName":"Makefile","path":"/Workspace/Makefile","type":"FILE"},{"displayName":"n.ipynb","path":"/Workspace/n.ipynb","type":"NOTEBOOK"}]}`)
+			return
+		}
+		q := req.URL.Query()
+		switch {
+		case strings.HasSuffix(req.URL.EscapedPath(), "Makefile"):
+			switch {
+			case q.Get("type") == "file" && q.Get("content") == "1":
+				fmt.Fprint(w, `{"name":"Makefile","path":"Workspace/Makefile","type":"file","format":"text","content":"all:\n"}`)
+			case q.Get("type") == "file":
+				fmt.Fprint(w, `{"name":"Makefile","path":"Workspace/Makefile","type":"file"}`)
+			case q.Get("content") == "0":
+				// Observed: the type is inferred from the missing extension.
+				fmt.Fprint(w, `{"name":"Makefile","path":"Workspace/Makefile","type":"directory"}`)
+			default:
+				w.WriteHeader(http.StatusBadRequest)
+				fmt.Fprint(w, `{"code":"InvalidParameter","message":"Bad Request"}`)
+			}
+		default:
+			if q.Has("type") {
+				t.Errorf("notebook request has type %q", q.Get("type"))
+			}
+			fmt.Fprint(w, `{"name":"n.ipynb","path":"Workspace/n.ipynb","type":"notebook","format":"json","content":{"cells":[]}}`)
+		}
+	})
+	data, err := r.ReadFile(context.Background(), "Makefile")
+	if err != nil || string(data) != "all:\n" {
+		t.Fatalf("ReadFile = %q, %v", data, err)
+	}
+	st, err := r.Stat(context.Background(), "Makefile")
+	if err != nil || st.Kind != backend.File || st.Size != 5 {
+		t.Fatalf("Stat = %+v, %v", st, err)
+	}
+	if _, err = r.ReadFile(context.Background(), "n.ipynb"); err != nil {
+		t.Fatalf("notebook ReadFile: %v", err)
+	}
+}

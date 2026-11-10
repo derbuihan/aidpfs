@@ -14,6 +14,8 @@ import (
 
 // MutationIntent records a single potentially destructive remote request.
 // Confirmed records a successful response, not enduring remote state.
+// Rejected records a definite rejection by the server or a failure before any
+// request was sent; either way the operation was not applied.
 type MutationIntent struct {
 	ID           string `json:"id"`
 	PlatformID   string `json:"platform_id"`
@@ -22,6 +24,7 @@ type MutationIntent struct {
 	Source       string `json:"source"`
 	Destination  string `json:"destination,omitempty"`
 	Confirmed    bool   `json:"confirmed"`
+	Rejected     bool   `json:"rejected"`
 	Invalid      bool   `json:"invalid"`
 }
 
@@ -30,7 +33,7 @@ func validMutationPath(p string) bool {
 }
 
 func validMutation(m MutationIntent) bool {
-	if !validID.MatchString(m.ID) || !validIdentity(m.PlatformID) || !validIdentity(m.WorkspaceKey) || !validMutationPath(m.Source) || m.Confirmed || m.Invalid {
+	if !validID.MatchString(m.ID) || !validIdentity(m.PlatformID) || !validIdentity(m.WorkspaceKey) || !validMutationPath(m.Source) || m.Confirmed || m.Rejected || m.Invalid {
 		return false
 	}
 	switch m.Operation {
@@ -66,7 +69,12 @@ func (s *Store) BeginMutation(platform, workspace, operation, source, destinatio
 	return id, nil
 }
 
-func (s *Store) ConfirmMutation(id string) error {
+func (s *Store) ConfirmMutation(id string) error { return s.resolveMutation(id, "confirmed\n") }
+
+// RejectMutation marks an intent whose request was definitely not applied.
+func (s *Store) RejectMutation(id string) error { return s.resolveMutation(id, "rejected\n") }
+
+func (s *Store) resolveMutation(id, marker string) error {
 	if !validID.MatchString(id) {
 		return errors.New("invalid mutation intent id")
 	}
@@ -78,7 +86,7 @@ func (s *Store) ConfirmMutation(id string) error {
 	if json.Unmarshal(data, &m) != nil || m.ID != id || !validMutation(m) {
 		return errors.New("invalid mutation intent")
 	}
-	if err := writeNew(filepath.Join(s.dir, "mutation-"+id+".done"), []byte("confirmed\n")); err != nil {
+	if err := writeNew(filepath.Join(s.dir, "mutation-"+id+".done"), []byte(marker)); err != nil {
 		return err
 	}
 	return syncDir(s.dir)
@@ -106,9 +114,12 @@ func (s *Store) ListMutations() ([]MutationIntent, error) {
 			item = m
 			marker, markErr := readFile(filepath.Join(s.dir, "mutation-"+id+".done"), 32)
 			if markErr == nil {
-				if string(marker) == "confirmed\n" {
+				switch string(marker) {
+				case "confirmed\n":
 					item.Confirmed = true
-				} else {
+				case "rejected\n":
+					item.Rejected = true
+				default:
 					item.Invalid = true
 				}
 			} else if !os.IsNotExist(markErr) {

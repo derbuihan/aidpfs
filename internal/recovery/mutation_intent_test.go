@@ -44,3 +44,28 @@ func TestMutationIntentDurableAndInvalid(t *testing.T) {
 		t.Fatal("accepted identical paths")
 	}
 }
+
+func TestRejectMutationMarksResolved(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.Chmod(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	s, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, err := s.BeginMutation("p", "w", "unlink", "/Workspace/a", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = s.RejectMutation(id); err != nil {
+		t.Fatal(err)
+	}
+	if err = s.ConfirmMutation(id); err == nil {
+		t.Fatal("resolved intent was resolved twice")
+	}
+	items, err := s.ListMutations()
+	if err != nil || len(items) != 1 || !items[0].Rejected || items[0].Confirmed || items[0].Invalid {
+		t.Fatalf("items=%+v err=%v", items, err)
+	}
+}

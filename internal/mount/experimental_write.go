@@ -169,7 +169,7 @@ func (n *experimentalNode) Create(ctx context.Context, name string, flags uint32
 	if n.buffers.create == nil {
 		return nil, nil, 0, syscall.EOPNOTSUPP
 	}
-	if name == "" || name == "." || name == ".." || strings.ContainsAny(name, "/\x00") || path.Base(name) != name {
+	if name == "" || name == "." || name == ".." || strings.ContainsAny(name, "/\x00") || path.Base(name) != name || !backend.ValidName(name) {
 		return nil, nil, 0, syscall.EINVAL
 	}
 	rel := name
@@ -206,7 +206,7 @@ func (n *experimentalNode) Mkdir(ctx context.Context, name string, _ uint32, out
 	if n.buffers.mkdir == nil {
 		return nil, syscall.EOPNOTSUPP
 	}
-	if name == "" || name == "." || name == ".." || strings.ContainsAny(name, "/\x00") || path.Base(name) != name {
+	if name == "" || name == "." || name == ".." || strings.ContainsAny(name, "/\x00") || path.Base(name) != name || !backend.ValidName(name) {
 		return nil, syscall.EINVAL
 	}
 	rel := name
@@ -221,6 +221,9 @@ func (n *experimentalNode) Mkdir(ctx context.Context, name string, _ uint32, out
 	child := &experimentalNode{reader: n.reader, buffers: n.buffers, rel: rel}
 	return n.NewInode(ctx, child, fs.StableAttr{Mode: syscall.S_IFDIR}), 0
 }
+
+// renameNoReplace is Linux RENAME_NOREPLACE.
+const renameNoReplace = 1
 
 // Unlink is limited to FILEs and requires the caller's exclusive use of the
 // subtree: remote delete preconditions are not enforced in the tested tenant.
@@ -252,7 +255,10 @@ func (n *experimentalNode) mutate(ctx context.Context, op, name string, parent f
 	if name == "" || name == "." || name == ".." || strings.ContainsAny(name, "/\x00") || path.Base(name) != name {
 		return syscall.EINVAL
 	}
-	if flags != 0 {
+	// RENAME_NOREPLACE is honored by never replacing; other flags such as
+	// RENAME_EXCHANGE and RENAME_WHITEOUT are unsupported.
+	noReplace := flags == renameNoReplace
+	if flags != 0 && !noReplace {
 		return syscall.EOPNOTSUPP
 	}
 	source := path.Join(n.path(), name)
@@ -262,7 +268,7 @@ func (n *experimentalNode) mutate(ctx context.Context, op, name string, parent f
 		if !ok || p.buffers != n.buffers {
 			return syscall.EXDEV
 		}
-		if newName == "" || newName == "." || newName == ".." || strings.ContainsAny(newName, "/\x00") || path.Base(newName) != newName {
+		if newName == "" || newName == "." || newName == ".." || strings.ContainsAny(newName, "/\x00") || path.Base(newName) != newName || !backend.ValidName(newName) {
 			return syscall.EINVAL
 		}
 		dest = path.Join(p.path(), newName)
@@ -294,6 +300,12 @@ func (n *experimentalNode) mutate(ctx context.Context, op, name string, parent f
 	if dest != "" {
 		_, err = n.reader.Stat(ctx, dest)
 		if err == nil {
+			// AIDP moves the source into an existing FOLDER destination and
+			// rejects FILE/NOTEBOOK destinations; POSIX replacement is not
+			// available. With RENAME_NOREPLACE the caller asked for EEXIST.
+			if noReplace {
+				return syscall.EEXIST
+			}
 			return syscall.EOPNOTSUPP
 		}
 		if !errors.Is(err, syscall.ENOENT) {
@@ -301,7 +313,12 @@ func (n *experimentalNode) mutate(ctx context.Context, op, name string, parent f
 		}
 	}
 	if err = n.buffers.mutate(ctx, op, source, dest); err != nil {
-		n.buffers.mutationBlocked = true
+		var rejected *backend.NotAppliedError
+		if !errors.As(err, &rejected) {
+			// The outcome is unknown or its intent is unresolved: stop
+			// further namespace changes until the journal is inspected.
+			n.buffers.mutationBlocked = true
+		}
 		return errno(err)
 	}
 	if dest != "" {

@@ -275,17 +275,29 @@ type content struct {
 	Content  json.RawMessage `json:"content"`
 }
 
-func (r *Reader) fetch(ctx context.Context, rel string, include bool) (content, []byte, error) {
+// contentQuery returns the contents query for a fetch. The tested tenant
+// infers the type of an extension-less FILE (for example Makefile) from its
+// name: content=0 reports it as a directory and content=1 fails with HTTP 400
+// unless type=file is given. Listed FILEs therefore ask for that type.
+func contentQuery(include bool, listedKind backend.Kind) url.Values {
+	q := url.Values{"content": {"0"}}
+	if include {
+		q.Set("content", "1")
+	}
+	if listedKind == backend.File {
+		q.Set("type", "file")
+	}
+	return q
+}
+
+func (r *Reader) fetch(ctx context.Context, rel string, include bool, listedKind backend.Kind) (content, []byte, error) {
 	remote, err := config.Resolve(r.root, rel)
 	if err != nil {
 		return content{}, nil, syscall.EINVAL
 	}
 	// contentPath is one path parameter, including encoded slash separators.
 	endpoint := r.base + "/notebook/api/contents/" + url.PathEscape(strings.TrimPrefix(remote, "/"))
-	q := url.Values{"content": {"1"}}
-	if !include {
-		q.Set("content", "0")
-	}
+	q := contentQuery(include, listedKind)
 	var c content
 	_, err = r.get(ctx, endpoint, q, &c)
 	if err != nil {
@@ -378,13 +390,13 @@ func (r *Reader) Stat(ctx context.Context, rel string) (backend.Metadata, error)
 	if err != nil {
 		return backend.Metadata{}, err
 	}
-	c, _, err := r.fetch(ctx, rel, false)
+	c, _, err := r.fetch(ctx, rel, false, listedKind)
 	if err != nil {
 		return backend.Metadata{}, err
 	}
 	var data []byte
 	if c.Type != "directory" {
-		c, data, err = r.fetch(ctx, rel, true)
+		c, data, err = r.fetch(ctx, rel, true, listedKind)
 		if err != nil {
 			return backend.Metadata{}, err
 		}
@@ -413,14 +425,14 @@ func (r *Reader) ReadFile(ctx context.Context, rel string) ([]byte, error) {
 	if listedKind == backend.Directory {
 		return nil, syscall.EISDIR
 	}
-	c, _, err := r.fetch(ctx, rel, false)
+	c, _, err := r.fetch(ctx, rel, false, listedKind)
 	if err != nil {
 		return nil, err
 	}
 	if c.Type == "directory" {
 		return nil, syscall.EISDIR
 	}
-	c, data, err := r.fetch(ctx, rel, true)
+	c, data, err := r.fetch(ctx, rel, true, listedKind)
 	if err != nil {
 		return nil, err
 	}

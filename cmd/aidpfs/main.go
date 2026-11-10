@@ -116,7 +116,7 @@ func verifiedMutation(ctx context.Context, r mutationReader, op, src, dst string
 	if op == "rename" {
 		before, err = r.ReadFile(ctx, src)
 		if err != nil {
-			return err
+			return backend.NotApplied(err)
 		}
 	}
 	if err = r.MutateFile(ctx, op, src, dst); err != nil {
@@ -155,6 +155,14 @@ func journalMutation(ctx context.Context, store *recovery.Store, c config.Config
 		return err
 	}
 	if err = mutate(ctx, operation, source, destination); err != nil {
+		var rejected *backend.NotAppliedError
+		if errors.As(err, &rejected) {
+			if rerr := store.RejectMutation(id); rerr != nil {
+				// The intent stays unresolved; report a plain error so the
+				// mount stops further namespace changes.
+				return errors.Join(rejected.Err, rerr)
+			}
+		}
 		return err
 	}
 	return store.ConfirmMutation(id)
@@ -216,7 +224,7 @@ func checkRecoveryAfterUnmount(pending int, journal *recovery.Store) error {
 		return fmt.Errorf("cannot inspect mutation intents after unmount: %w", err)
 	}
 	for _, intent := range mutations {
-		if intent.Invalid || !intent.Confirmed {
+		if intent.Invalid || (!intent.Confirmed && !intent.Rejected) {
 			unknown++
 		}
 	}

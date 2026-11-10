@@ -97,3 +97,38 @@ func TestVerifiedMutation(t *testing.T) {
 		}
 	}
 }
+
+func TestJournalMutationRecordsDefiniteRejection(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.Chmod(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	store, err := recovery.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := config.Config{PlatformID: "p", WorkspaceKey: "w", RemotePath: "/Workspace"}
+	err = journalMutation(context.Background(), store, c, "rename", "a", "b", func(context.Context, string, string, string) error {
+		return backend.NotApplied(syscall.EEXIST)
+	})
+	var rejected *backend.NotAppliedError
+	if !errors.Is(err, syscall.EEXIST) || !errors.As(err, &rejected) {
+		t.Fatalf("error = %v", err)
+	}
+	items, err := store.ListMutations()
+	if err != nil || len(items) != 1 || !items[0].Rejected || items[0].Confirmed || items[0].Invalid {
+		t.Fatalf("intent=%+v error=%v", items, err)
+	}
+	if err = checkRecoveryAfterUnmount(0, store); err != nil {
+		t.Fatalf("rejected intent requires recovery: %v", err)
+	}
+}
+
+func TestVerifiedMutationPreReadFailureIsNotApplied(t *testing.T) {
+	f := &mutationFake{changed: true} // source "a" is no longer readable
+	err := verifiedMutation(context.Background(), f, "rename", "a", "b")
+	var rejected *backend.NotAppliedError
+	if !errors.As(err, &rejected) || f.calls != 0 {
+		t.Fatalf("error=%v calls=%d", err, f.calls)
+	}
+}

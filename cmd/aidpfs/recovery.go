@@ -213,7 +213,7 @@ func runRecovery(args []string, out io.Writer) error {
 				return err
 			}
 		}
-		fmt.Fprintf(out, "operation=%s confirmed=%t source=%s destination=%s (separate point-in-time observations; no operation replayed)\n", selected.Operation, selected.Confirmed, source, destination)
+		fmt.Fprintf(out, "operation=%s confirmed=%t rejected=%t source=%s destination=%s (separate point-in-time observations; no operation replayed)\n", selected.Operation, selected.Confirmed, selected.Rejected, source, destination)
 		return nil
 	case "inspect":
 		if *id == "" || *region == "" || *output != "" {

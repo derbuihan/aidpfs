@@ -71,7 +71,7 @@ func TestLiveReadOnlyWorkspace(t *testing.T) {
 	}
 	for _, kind := range []backend.Kind{backend.File, backend.Notebook} {
 		sample := found[kind]
-		content, data, err := r.fetch(ctx, sample.rel, true)
+		content, data, err := r.fetch(ctx, sample.rel, true, kind)
 		if err != nil {
 			t.Fatalf("read existing %s: %v", kindName(kind), err)
 		}

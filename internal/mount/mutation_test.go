@@ -11,6 +11,8 @@ import (
 
 	"aidpfs/internal/backend"
 	"aidpfs/internal/writeback"
+
+	"github.com/hanwen/go-fuse/v2/fuse"
 )
 
 type mutableReader struct {
@@ -56,8 +58,10 @@ func TestMutationGuardsAndUnknownOutcome(t *testing.T) {
 		t.Fatalf("open: %v", got)
 	}
 	delete(b.values, "file")
-	if got := n.Rename(ctx, "file", n, "file", 1); got != syscall.EOPNOTSUPP {
-		t.Fatalf("flags: %v", got)
+	for _, flags := range []uint32{2, 4, 3} { // RENAME_EXCHANGE, RENAME_WHITEOUT, combined
+		if got := n.Rename(ctx, "file", n, "other", flags); got != syscall.EOPNOTSUPP {
+			t.Fatalf("flags %d: %v", flags, got)
+		}
 	}
 	if got := n.Unlink(ctx, "file"); got != syscall.EIO || calls != 1 {
 		t.Fatalf("first: %v calls %d", got, calls)
@@ -111,5 +115,71 @@ func TestMutationMountRenameAndUnlink(t *testing.T) {
 	}
 	if _, err = os.Stat(filepath.Join(dir, "b")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("deleted path: %v", err)
+	}
+}
+
+func TestRenameDestinationRulesAndRejectedOutcome(t *testing.T) {
+	ctx := context.Background()
+	r := &mutableReader{files: map[string]bool{"a.txt": true, "b.txt": true}}
+	var calls []string
+	result := error(nil)
+	b := &experimentalBuffers{values: map[string]*experimentalEntry{}, mutate: func(_ context.Context, op, src, dst string) error {
+		calls = append(calls, op+":"+src+">"+dst)
+		return result
+	}}
+	n := &experimentalNode{reader: r, buffers: b}
+	if got := n.Rename(ctx, "a.txt", n, "b.txt", 0); got != syscall.EOPNOTSUPP {
+		t.Fatalf("plain rename onto existing = %v, want EOPNOTSUPP", got)
+	}
+	if got := n.Rename(ctx, "a.txt", n, "b.txt", renameNoReplace); got != syscall.EEXIST {
+		t.Fatalf("RENAME_NOREPLACE onto existing = %v, want EEXIST", got)
+	}
+	for _, bad := range []string{"日本.txt", "x#y", "x(y)", "a~", "q?.txt"} {
+		if got := n.Rename(ctx, "a.txt", n, bad, 0); got != syscall.EINVAL {
+			t.Fatalf("rename to %q = %v, want EINVAL", bad, got)
+		}
+	}
+	if len(calls) != 0 {
+		t.Fatalf("rejected locally but sent %v", calls)
+	}
+	// A definite server rejection is reported and does not block later work.
+	result = backend.NotApplied(syscall.EEXIST)
+	if got := n.Rename(ctx, "a.txt", n, "c.txt", renameNoReplace); got != syscall.EEXIST {
+		t.Fatalf("server conflict = %v, want EEXIST", got)
+	}
+	result = nil
+	if got := n.Rename(ctx, "a.txt", n, "c.txt", renameNoReplace); got != 0 {
+		t.Fatalf("rename after rejection = %v", got)
+	}
+	// An unknown outcome blocks every later namespace change.
+	result = errors.New("uncertain")
+	if got := n.Unlink(ctx, "b.txt"); got != syscall.EIO {
+		t.Fatalf("unknown unlink = %v", got)
+	}
+	result = nil
+	if got := n.Unlink(ctx, "a.txt"); got != syscall.EIO {
+		t.Fatalf("unlink after unknown = %v, want EIO", got)
+	}
+	if len(calls) != 3 {
+		t.Fatalf("calls = %v", calls)
+	}
+}
+
+func TestCreateAndMkdirRejectInvalidNames(t *testing.T) {
+	ctx := context.Background()
+	sent := 0
+	record := func(context.Context, string) error { sent++; return nil }
+	b := &experimentalBuffers{values: map[string]*experimentalEntry{}, create: record, mkdir: record}
+	n := &experimentalNode{reader: &fake{}, buffers: b}
+	for _, bad := range []string{"日本.txt", "file~", "a#b", "x(y)"} {
+		if _, _, _, got := n.Create(ctx, bad, 0, 0, &fuse.EntryOut{}); got != syscall.EINVAL {
+			t.Fatalf("create %q = %v", bad, got)
+		}
+		if _, got := n.Mkdir(ctx, bad, 0, &fuse.EntryOut{}); got != syscall.EINVAL {
+			t.Fatalf("mkdir %q = %v", bad, got)
+		}
+	}
+	if sent != 0 {
+		t.Fatalf("sent %d requests for invalid names", sent)
 	}
 }
