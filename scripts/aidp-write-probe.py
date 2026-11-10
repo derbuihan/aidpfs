@@ -114,7 +114,16 @@ def main():
                 'is-overwrite': 'false', 'Content-Type': 'application/octet-stream'}, data=b'aidpfs-vscode-external-seed\n')
             if response.status_code not in (200, 201): raise RuntimeError('VS Code external-update fixture creation failed or ambiguous')
             owned.add(external_path)
-            print('VS Code synthetic FILE fixtures created', flush=True)
+            notebook_path = root + '/vscode-e2e.ipynb'
+            notebook_body = {'type': 'notebook', 'format': 'json', 'content': {'cells': [
+                {'cell_type': 'markdown', 'id': 'vscode-md', 'metadata': {}, 'source': '# aidpfs VS Code notebook'},
+                {'cell_type': 'code', 'id': 'vscode-code', 'execution_count': None, 'metadata': {}, 'outputs': [],
+                 'source': '# aidpfs-vscode-notebook-seed\nvalue = 1'}],
+                'metadata': {'aidpfs_marker': 'vscode-seed'}, 'nbformat': 4, 'nbformat_minor': 5}}
+            response = request('PUT', contents(notebook_path), headers={'Content-Type': 'application/json'}, data=json.dumps(notebook_body))
+            if response.status_code not in (200, 201): raise RuntimeError('VS Code notebook fixture creation failed or ambiguous')
+            owned.add(notebook_path)
+            print('VS Code synthetic FILE and Notebook fixtures created', flush=True)
         retry_path = root + '/retry-token-create.bin'
         retry_headers = {'path': retry_path, 'type': 'FILE', 'is-overwrite': 'false',
                          'Content-Type': 'application/octet-stream', 'opc-retry-token': uuid.uuid4().hex}
@@ -330,7 +339,8 @@ def main():
                 if a.vscode_check:
                     vscode_env = os.environ.copy()
                     vscode_env.update({'AIDPFS_E2E_WORKSPACE': write_mount_dir, 'AIDPFS_E2E_FILE': 'vscode-e2e.txt',
-                        'AIDPFS_E2E_EXTERNAL_FILE': 'vscode-external.txt', 'AIDPFS_E2E_REMOTE_ROOT': root})
+                        'AIDPFS_E2E_EXTERNAL_FILE': 'vscode-external.txt', 'AIDPFS_E2E_NOTEBOOK': 'vscode-e2e.ipynb',
+                        'AIDPFS_E2E_REMOTE_ROOT': root})
                     vscode = subprocess.run(['scripts/tests/vscode/run.sh', write_mount_dir], env=vscode_env,
                         capture_output=True, text=True, timeout=360)
                     if vscode.returncode:
@@ -349,7 +359,13 @@ def main():
                     external_data = base64.b64decode(external_model['content']) if external_model.get('format') == 'base64' else external_model.get('content', '').encode()
                     if external_data != b'aidpfs-vscode-external-update\n':
                         raise RuntimeError('external API update did not persist to the synthetic FILE')
-                    print('VS Code edit/save, held-handle rejection and closed FILE rename/delete verified; saved data checked by signed GET', flush=True)
+                    notebook_check = request('GET', contents(notebook_path), params={'content': 1})
+                    if not notebook_check.ok: raise RuntimeError('VS Code saved Notebook verification failed')
+                    saved_cells = notebook_check.json().get('content', {}).get('cells', [])
+                    saved_source = ''.join(saved_cells[1]['source']) if len(saved_cells) == 2 and isinstance(saved_cells[1].get('source'), list) else (saved_cells[1].get('source', '') if len(saved_cells) == 2 else '')
+                    if 'aidpfs-vscode-notebook-saved' not in saved_source:
+                        raise RuntimeError('VS Code Notebook edit is missing from the contents API')
+                    print('VS Code edit/save, held-handle rejection, closed FILE rename/delete and Notebook edit/save verified; saved data checked by signed GET', flush=True)
                 if a.vim_check:
                     vim_target = os.path.join(write_mount_dir, 'vim-fixture.txt')
                     path_stat = os.stat(vim_target)
@@ -398,7 +414,7 @@ def main():
                 diagnostic = subprocess.run([a.write_mount_binary, 'recovery', 'inspect-create', '--dir', recovery_dir,
                     '--id', intent['id'], '--region', a.region, '--profile', a.profile, '--endpoint', a.endpoint],
                     capture_output=True, text=True, timeout=60)
-                if diagnostic.returncode or 'confirmed=true observation=file_listed' not in diagnostic.stdout or created_path in diagnostic.stdout:
+                if diagnostic.returncode or not all(x in diagnostic.stdout.split() for x in ('confirmed=true', 'rejected=false', 'observation=file_listed')) or created_path in diagnostic.stdout:
                     raise RuntimeError('create intent diagnosis failed')
                 print('write-enabled CLI create intent diagnosis succeeded', flush=True)
                 print('write-enabled CLI create, write, fsync and duplicate rejection succeeded', flush=True)
@@ -450,7 +466,7 @@ def main():
                 diagnostic = subprocess.run([a.write_mount_binary, 'recovery', 'inspect-create', '--dir', recovery_dir,
                     '--id', dir_intents[0]['id'], '--region', a.region, '--profile', a.profile, '--endpoint', a.endpoint],
                     capture_output=True, text=True, timeout=60)
-                if diagnostic.returncode or 'confirmed=true observation=directory_listed' not in diagnostic.stdout: raise RuntimeError('directory diagnosis failed')
+                if diagnostic.returncode or not all(x in diagnostic.stdout.split() for x in ('confirmed=true', 'rejected=false', 'observation=directory_listed')): raise RuntimeError('directory diagnosis failed')
                 print('write-enabled CLI mkdir, duplicate rejection and intent diagnosis succeeded', flush=True)
                 child_path = created_dir + '/child.bin'
                 with open(os.path.join(write_mount_dir, 'cli-dir', 'child.bin'), 'xb', buffering=0) as child_file:
@@ -504,7 +520,7 @@ def main():
                 diagnostic = subprocess.run([a.write_mount_binary, 'recovery', 'inspect-create', '--dir', recovery_dir,
                     '--id', child_intents[0]['id'], '--region', a.region, '--profile', a.profile, '--endpoint', a.endpoint],
                     capture_output=True, text=True, timeout=60)
-                if diagnostic.returncode or 'confirmed=true observation=not_listed' not in diagnostic.stdout: raise RuntimeError('removed child diagnosis failed')
+                if diagnostic.returncode or not all(x in diagnostic.stdout.split() for x in ('confirmed=true', 'rejected=false', 'observation=not_listed')): raise RuntimeError('removed child diagnosis failed')
                 print('write-enabled CLI nested create, write, append, read, cleanup and not_listed diagnosis succeeded', flush=True)
                 with open(os.path.join(write_mount_dir, 'upload-par.bin'), 'r+b', buffering=0) as handle:
                     handle.seek(0)

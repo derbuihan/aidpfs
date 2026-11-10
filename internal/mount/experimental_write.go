@@ -570,8 +570,8 @@ func MountWithMutations(ctx context.Context, mountpoint string, reader backend.R
 	return mountWithMutations(ctx, mountpoint, reader, open, create, mkdir, mutate)
 }
 
-// MountExperimental provides the supported, explicitly enabled FILE write
-// operations. Notebook writes, rename and deletion remain unsupported.
+// MountExperimental provides the supported, explicitly enabled FILE and
+// Notebook write operations, without rename or deletion.
 func MountExperimental(ctx context.Context, mountpoint string, reader backend.Reader, open func(context.Context, string) (*writeback.Buffer, error), create, mkdir func(context.Context, string) error) (*ExperimentalMount, error) {
 	return mountExperimentalWithState(ctx, mountpoint, reader, open, create, mkdir)
 }

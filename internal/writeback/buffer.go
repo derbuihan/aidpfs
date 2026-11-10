@@ -31,6 +31,12 @@ type Buffer struct {
 	saver       Saver
 }
 
+// Validator is optionally implemented by a Remote that accepts only some
+// content, such as nbformat Notebooks.
+type Validator interface {
+	Validate([]byte) error
+}
+
 func NewBuffer(target Target, baseETag string, initial []byte, journal *recovery.Store, remote Remote) (*Buffer, error) {
 	if journal == nil || remote == nil || baseETag == "" || len(initial) > maxBuffer {
 		return nil, syscall.EINVAL
@@ -124,6 +130,13 @@ func (b *Buffer) Sync(ctx context.Context) error {
 	}
 	if !b.dirty {
 		return nil
+	}
+	// A content check rejects the save before any network request; the
+	// buffer stays dirty and usable so the caller can correct the content.
+	if v, ok := b.saver.Remote.(Validator); ok {
+		if err := v.Validate(b.data); err != nil {
+			return err
+		}
 	}
 	id, err := b.saver.SavePrepared(ctx, b.latestID, b.target, b.baseETag, b.data)
 	if err != nil {

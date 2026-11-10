@@ -16,6 +16,8 @@ import (
 	"sync"
 	"syscall"
 	"testing"
+
+	"aidpfs/internal/backend"
 )
 
 func TestPARWriterRejectsDifferentTarget(t *testing.T) {
@@ -33,9 +35,18 @@ func TestPARWriterRejectsDifferentTarget(t *testing.T) {
 	}
 }
 
-func TestExperimentalBufferRejectsNotebook(t *testing.T) {
+// Notebooks are opened through the PAR protocol with type NOTEBOOK; folders
+// are still rejected before any PAR request.
+func TestExperimentalBufferNotebookUsesNotebookType(t *testing.T) {
+	var types []string
+	listed := "NOTEBOOK"
 	r := serverReader(t, func(w http.ResponseWriter, req *http.Request) {
-		fmt.Fprint(w, `{"items":[{"displayName":"test.ipynb","path":"/Workspace/test.ipynb","type":"NOTEBOOK"}]}`)
+		if strings.HasSuffix(req.URL.Path, "/objects") {
+			fmt.Fprintf(w, `{"items":[{"displayName":"test.ipynb","path":"/Workspace/test.ipynb","type":%q}]}`, listed)
+			return
+		}
+		types = append(types, req.Header.Get("type"))
+		fmt.Fprint(w, `{"parUrl":"https://elsewhere.example/p","eTag":"e","size":2}`)
 	})
 	dir := t.TempDir()
 	if err := os.Chmod(dir, 0700); err != nil {
@@ -45,8 +56,16 @@ func TestExperimentalBufferRejectsNotebook(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = r.OpenExperimentalBuffer(context.Background(), "test.ipynb", "ap-osaka-1", journal); !errors.Is(err, syscall.EOPNOTSUPP) {
-		t.Fatalf("notebook accepted: %v", err)
+	// The mock's PAR origin is rejected, after the NOTEBOOK metadata request.
+	if _, err = r.OpenExperimentalBuffer(context.Background(), "test.ipynb", "ap-osaka-1", journal); err == nil || errors.Is(err, syscall.EOPNOTSUPP) {
+		t.Fatalf("notebook open: %v", err)
+	}
+	if len(types) != 1 || types[0] != "NOTEBOOK" {
+		t.Fatalf("metadata types = %v", types)
+	}
+	listed = "FOLDER"
+	if _, err = r.OpenExperimentalBuffer(context.Background(), "test.ipynb", "ap-osaka-1", journal); !errors.Is(err, syscall.EOPNOTSUPP) || len(types) != 1 {
+		t.Fatalf("folder open: %v types %v", err, types)
 	}
 }
 
@@ -167,9 +186,9 @@ func TestPARWriterSaveVerifyAndSnapshot(t *testing.T) {
 	if err = w.Verify(context.Background(), target, newTag, []byte("next")); !errors.Is(err, syscall.ESTALE) {
 		t.Fatalf("verify mismatched bytes = %v, want ESTALE", err)
 	}
-	listedKind = "NOTEBOOK"
+	listedKind = "FOLDER"
 	if _, err = w.Snapshot(context.Background(), target); !errors.Is(err, syscall.EOPNOTSUPP) {
-		t.Fatalf("snapshot Notebook = %v, want EOPNOTSUPP", err)
+		t.Fatalf("snapshot FOLDER = %v, want EOPNOTSUPP", err)
 	}
 }
 
@@ -218,5 +237,35 @@ func TestOpenExperimentalBufferRejectsInvalidOrUnversionedTarget(t *testing.T) {
 	}
 	if _, err = newOCIParTransport("ap-osaka-1"); err != nil {
 		t.Fatalf("valid OCI region rejected: %v", err)
+	}
+}
+
+func TestValidNotebook(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		data string
+		ok   bool
+	}{
+		{"empty", `{"cells":[],"metadata":{},"nbformat":4,"nbformat_minor":5}`, true},
+		{"cells", `{"cells":[{"cell_type":"code","source":"x","metadata":{},"outputs":[],"execution_count":null},{"cell_type":"markdown","source":[],"metadata":{}},{"cell_type":"raw","source":"","metadata":{}}],"metadata":{"k":1},"nbformat":4,"nbformat_minor":4,"extra":true}`, true},
+		{"truncated", `{"cells":[`, false},
+		{"empty bytes", ``, false},
+		{"trailing data", `{"cells":[],"metadata":{},"nbformat":4,"nbformat_minor":5} {}`, false},
+		{"no cells", `{"metadata":{},"nbformat":4,"nbformat_minor":5}`, false},
+		{"nbformat 3", `{"cells":[],"metadata":{},"nbformat":3,"nbformat_minor":0}`, false},
+		{"bad cell type", `{"cells":[{"cell_type":"heading"}],"metadata":{},"nbformat":4,"nbformat_minor":5}`, false},
+		{"array", `[]`, false},
+	} {
+		if got := validNotebook([]byte(tc.data)) == nil; got != tc.ok {
+			t.Errorf("%s: valid=%t want %t", tc.name, got, tc.ok)
+		}
+	}
+	w := &parWriter{}
+	if w.Validate([]byte("anything")) != nil {
+		t.Error("FILE writer validated content")
+	}
+	w.kind = backend.Notebook
+	if w.Validate([]byte("anything")) == nil {
+		t.Error("Notebook writer accepted invalid content")
 	}
 }

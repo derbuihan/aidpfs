@@ -120,6 +120,7 @@ def main():
     p.add_argument('--workspace-name', default='sandbox')
     p.add_argument('--journal', required=True)
     p.add_argument('--cases', default='LP', help='L: lossless matrix, P: PAR CAS on notebooks')
+    p.add_argument('--mount-binary', help='aidpfs executable for case M (real --write mount)')
     p.add_argument('--keep', action='store_true', help='keep fixtures (for Workbench checks); print root')
     a = p.parse_args()
 
@@ -147,7 +148,8 @@ def main():
     match = [x for x in ws.json().get('items', []) if a.workspace_name in (x.get('displayName'), x.get('name'))]
     if len(match) != 1:
         sys.exit('workspace not uniquely found')
-    base = pbase + '/workspaces/' + quote(match[0].get('key') or match[0].get('workspaceKey') or match[0].get('id'), safe='')
+    wkey = match[0].get('key') or match[0].get('workspaceKey') or match[0].get('id')
+    base = pbase + '/workspaces/' + quote(wkey, safe='')
 
     root = '/Workspace/Shared/aidpfs-notebook-probe-' + uuid.uuid4().hex
     fd = os.open(a.journal, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
@@ -322,6 +324,136 @@ def main():
                 fmt = 'indent=1 sorted' if stored == serialize(stored_nb or {}) else 'other'
                 compare(f'L {name} PUT->PAR stored ({fmt})', nb, stored_nb)
                 compare(f'L {name} PUT->contents GET', nb, contents_get(pth2))
+
+        if 'M' in a.cases:
+            import errno as E
+            import subprocess
+            import tempfile
+            if not a.mount_binary:
+                raise RuntimeError('case M requires --mount-binary')
+
+            def start_mount():
+                rec = tempfile.mkdtemp(prefix='aidpfs-rec-')
+                os.chmod(rec, 0o700)
+                mnt = tempfile.mkdtemp(prefix='aidpfs-mnt-')
+                proc = subprocess.Popen([a.mount_binary, '--profile', a.profile, '--region', a.region,
+                                         '--platform-id', plats[0]['id'], '--workspace-key', wkey, '--remote-path', root,
+                                         '--mount-point', mnt, '--write', '--recovery-dir', rec],
+                                        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+                for _ in range(100):
+                    if os.path.ismount(mnt):
+                        return proc, mnt, rec
+                    if proc.poll() is not None:
+                        raise RuntimeError('mount exited: ' + proc.stdout.read()[-300:])
+                    time.sleep(0.2)
+                raise RuntimeError('mount timeout')
+
+            def stop_mount(proc, mnt):
+                subprocess.run(['fusermount3', '-u', mnt], capture_output=True)
+                try:
+                    out, _ = proc.communicate(timeout=30)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                    out, _ = proc.communicate()
+                if not os.path.ismount(mnt):
+                    os.rmdir(mnt)
+                return proc.returncode, (out or '').strip()
+
+            def save_via_mount(path, data):
+                fd = os.open(path, os.O_WRONLY | os.O_TRUNC)
+                try:
+                    os.write(fd, data)
+                    try:
+                        os.fsync(fd)
+                        return 0
+                    except OSError as e:
+                        return e.errno
+                finally:
+                    try:
+                        os.close(fd)
+                    except OSError:
+                        pass
+
+            fixture = fixtures()['rich']
+            raw = serialize(fixture)
+            pth = root + '/mounted.ipynb'
+            put_notebook(pth, {'cells': [], 'metadata': {}, 'nbformat': 4, 'nbformat_minor': 5})
+            _, e0, _ = par_get(pth)
+            par_write(pth, raw, e0)
+
+            log('M session 1: read, edit, invalid save, rename/unlink')
+            proc, mnt, rec = start_mount()
+            try:
+                mp = os.path.join(mnt, 'mounted.ipynb')
+                st = os.stat(mp)
+                with open(mp, 'rb') as f:
+                    got = f.read()
+                record('M stat/read raw bytes', st.st_size == len(raw) and got == raw, f'size={st.st_size}/{len(raw)} equal={got == raw}')
+                edited = json.loads(got)
+                edited['cells'][1]['source'] = 'a = 10\nb = 20  # edited via aidpfs'
+                edited['metadata']['aidpfs_marker'] = 'mount-edit'
+                new_raw = serialize(edited)
+                rc = save_via_mount(mp, new_raw)
+                stored, _, _ = par_get(pth)
+                cg = contents_get(pth)
+                record('M save edited notebook', rc == 0 and stored == new_raw and cg and norm_source(cg['cells'][1]['source']) == 'a = 10\nb = 20  # edited via aidpfs',
+                       f'fsync_errno={E.errorcode.get(rc, rc)} par_equal={stored == new_raw} contents_marker={cg and cg.get("metadata", {}).get("aidpfs_marker")}')
+                rc = save_via_mount(mp, b'{"cells": [')
+                stored2, _, _ = par_get(pth)
+                record('M invalid JSON rejected', rc == E.EINVAL and stored2 == new_raw, f'fsync_errno={E.errorcode.get(rc, rc)} remote_unchanged={stored2 == new_raw}')
+                edited['metadata']['aidpfs_marker'] = 'mount-edit-2'
+                newer = serialize(edited)
+                rc = save_via_mount(mp, newer)
+                stored3, _, _ = par_get(pth)
+                record('M valid save after rejection', rc == 0 and stored3 == newer, f'fsync_errno={E.errorcode.get(rc, rc)} equal={stored3 == newer}')
+                for label, fn in [('rename', lambda: os.rename(mp, os.path.join(mnt, 'renamed.ipynb'))), ('unlink', lambda: os.unlink(mp))]:
+                    try:
+                        fn()
+                        rc = 0
+                    except OSError as e:
+                        rc = e.errno
+                    record(f'M notebook {label} rejected', rc == E.EOPNOTSUPP and pth in listing(root), E.errorcode.get(rc, str(rc)))
+            finally:
+                code, out = stop_mount(proc, mnt)
+                record('M session 1 unmount', code == 0, f'code={code} output={out[-200:]!r}')
+
+            for label, external in [('PAR writer', 'par'), ('contents PUT', 'rest')]:
+                log(f'M conflict with {label}')
+                proc, mnt, rec = start_mount()
+                try:
+                    mp = os.path.join(mnt, 'mounted.ipynb')
+                    fd = os.open(mp, os.O_RDWR)  # pins the storage version
+                    try:
+                        cur, etag, _ = par_get(pth)
+                        ext = json.loads(cur)
+                        ext['metadata']['aidpfs_marker'] = 'external-' + external
+                        if external == 'par':
+                            par_write(pth, serialize(ext), etag)
+                        else:
+                            put_notebook(pth, ext)
+                        mine = json.loads(cur)
+                        mine['metadata']['aidpfs_marker'] = 'mount-conflict'
+                        data = serialize(mine)
+                        os.ftruncate(fd, 0)
+                        os.pwrite(fd, data, 0)
+                        try:
+                            os.fsync(fd)
+                            rc = 0
+                        except OSError as e:
+                            rc = e.errno
+                    finally:
+                        try:
+                            os.close(fd)
+                        except OSError:
+                            pass
+                    cg = contents_get(pth)
+                    record(f'M conflict {label}', rc == E.ESTALE and cg and cg.get('metadata', {}).get('aidpfs_marker') == 'external-' + external,
+                           f'fsync_errno={E.errorcode.get(rc, rc)} remote_marker={cg and cg.get("metadata", {}).get("aidpfs_marker")}')
+                finally:
+                    code, out = stop_mount(proc, mnt)
+                    lr = subprocess.run([a.mount_binary, 'recovery', 'list', '--dir', rec], capture_output=True, text=True, timeout=60)
+                    stages = sorted({json.loads(l).get('stage') for l in lr.stdout.splitlines() if l.startswith('{') and 'stage' in l})
+                    record(f'M conflict {label} unmount', code != 0, f'code={code} msg={out[-160:]!r} journal_stages={stages}')
 
         if 'P' in a.cases:
             log('P notebook PAR CAS')

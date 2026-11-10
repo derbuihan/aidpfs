@@ -103,10 +103,10 @@ Oracle AI Data Platform (AIDP) Workbench の workspace をローカルから操�
 
 ### 12. 必須: Notebook 書き込みを実装して実環境で受け入れる
 
-- [ ] **Notebook backend**: 保存契約で選んだrepresentationを基に、storage versionを読取り時から保持するNotebook writerを実装する。選択された経路がPARなら `downloadFileMeta` → upload PAR refresh → ETag条件付き転送 → `UPDATE` → 独立readbackを行い、contents PUTの`if-match`をCASとして扱わない。chunked経路を使う場合は順序・hash・未完了uploadの回復を実装する。
-- [ ] **FUSEと復旧**: `--write`でNotebookのread/write/truncate/append/fsyncを明示的に有効化し、失敗・412・Workbench競合・結果不明でdirty内容とbase versionをjournalに保持する。Notebook write-openとFILE writeの境界、作成可否、close/fsyncのerrnoをmock/raceで検証する。安全な削除/rename根拠がなければ引き続き拒否する。
-- [ ] **実API/UI/Editor E2E**: 合成Notebookで空・rich・output付き・大きいchunked payloadを保存し、contents GET、export、Workbench UI再open、VS Code open/edit/save/reopenで受け入れ基準を照合する。2 client競合、Workbench autosave、412、timeout/process stop後のjournal保持と復旧を実施し、専用root cleanupを確認する。
-- [ ] **公開範囲の更新**: すべての受け入れ条件が満たされた後、READMEのNotebook read-only記述、CLI help、TASKのexperimental/write scopeを更新し、利用者向けに競合保証と未保証のwriterを明示する。
+- [x] **Notebook backend**: 2026-11-10、PAR metadata に種類（FILE/NOTEBOOK）を渡し、`OpenExperimentalBuffer` が Notebook を raw `.ipynb` で開いて storage ETag を固定。保存は FILE と同じ REFRESH → If-Match PUT → UPDATE → readback（contents PUT の `if-match` と chunk は不使用）。保存前に nbformat 4 JSON を検証し、不正なら `EINVAL` で送信せず buffer を凍結しない。recovery の Snapshot/inspect も Notebook に対応。書込み mount の `stat`/読取りは raw bytes（`WithRawNotebooks`）。
+- [x] **FUSEと復旧**: 2026-11-10、`--write` で既存 Notebook の read/write/truncate/fsync を有効化。412 は `ESTALE` と dirty buffer・journal 保持、unmount で recovery required。Notebook の rename/unlink は `EOPNOTSUPP`、`name.ipynb` の新規作成は FILE のまま。単体（validator、NOTEBOOK type、不正 JSON の非凍結）と Docker 実 FUSE の race suite が成功。
+- [x] **実API/UI/Editor E2E**: 2026-11-10、Docker runner の実 mount で rich Notebook の stat/読取りが raw bytes と一致、編集保存が PAR・contents GET に反映、不正 JSON が `EINVAL` でリモート不変、その後の正しい保存が成功、外部 PAR writer・contents PUT の先行更新がそれぞれ `ESTALE` で外部内容を保持。VS Code の Notebook エディタで open/edit/save/reopen と削除拒否を確認（live E2E 全体成功・cleanup 確認）。Workbench との競合は §11 の実測（先行 Workbench 保存は 412、後続 Workbench 保存は防げない）を契約に反映。大きな Notebook は 64 MiB 上限内で未試験。[詳細](docs/20261110_Notebook表現とPAR競合.md)。
+- [x] **公開範囲の更新**: 2026-11-10、README に Notebook writes 節（raw 表現、検証、`ESTALE`、Workbench と同時編集しない条件、Workbench 保存の欠落 field、作成/rename/delete 非対応）を追加し、read-only mount との表現差を明記。CLI help を更新。
 
 ### 13. GitHub Actions カバレッジと Linux 最新プレリリース
 

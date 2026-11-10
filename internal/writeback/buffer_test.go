@@ -153,3 +153,50 @@ func TestBufferRecoveryChainAndPersistedSave(t *testing.T) {
 		t.Fatal("new base version not recorded")
 	}
 }
+
+type validatingRemote struct {
+	*fakeRemote
+}
+
+func (validatingRemote) Validate(data []byte) error {
+	if !bytes.HasPrefix(data, []byte("{")) {
+		return syscall.EINVAL
+	}
+	return nil
+}
+
+// A rejected content check sends nothing and leaves the buffer dirty and
+// usable; once corrected, the same buffer saves normally.
+func TestBufferValidatorRejectsWithoutFreezing(t *testing.T) {
+	remote := &fakeRemote{tag: "old"}
+	dir := t.TempDir()
+	if err := os.Chmod(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	s, err := recovery.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := NewBuffer(Target{"p", "w", "/Workspace/n.ipynb"}, "old", []byte("{}"), s, validatingRemote{remote})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = b.Truncate(0); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = b.WriteAt([]byte("not json"), 0); err != nil {
+		t.Fatal(err)
+	}
+	if err = b.Sync(context.Background()); !errors.Is(err, syscall.EINVAL) || len(remote.calls) != 0 || !b.Dirty() {
+		t.Fatalf("invalid save: err=%v calls=%v dirty=%t", err, remote.calls, b.Dirty())
+	}
+	if err = b.Truncate(0); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = b.WriteAt([]byte("{\"ok\":1}"), 0); err != nil {
+		t.Fatal(err)
+	}
+	if err = b.Sync(context.Background()); err != nil || b.Dirty() || !bytes.Equal(remote.data, []byte("{\"ok\":1}")) {
+		t.Fatalf("corrected save: err=%v dirty=%t data=%q", err, b.Dirty(), remote.data)
+	}
+}

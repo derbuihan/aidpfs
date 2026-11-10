@@ -3,6 +3,7 @@ package aidp
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"path"
 	"strings"
 	"syscall"
@@ -13,12 +14,55 @@ import (
 	"aidpfs/internal/writeback"
 )
 
-// parWriter connects the supported single-mount FILE write path to OCI.
-// Rename is deliberately unsupported; failures retain local recovery state.
+// parWriter connects the supported single-mount FILE and Notebook write path
+// to OCI. Failures retain local recovery state.
 type parWriter struct {
 	reader    *Reader
 	transport *parTransport
+	kind      backend.Kind // backend.File or backend.Notebook; zero means File
 }
+
+func (w *parWriter) objectKind() backend.Kind {
+	if w.kind == 0 {
+		return backend.File
+	}
+	return w.kind
+}
+
+// Validate rejects a Notebook save whose bytes are not an nbformat 4 document,
+// so a partial or malformed write never replaces a workspace Notebook.
+func (w *parWriter) Validate(data []byte) error {
+	if w.objectKind() != backend.Notebook {
+		return nil
+	}
+	return validNotebook(data)
+}
+
+func validNotebook(data []byte) error {
+	var nb struct {
+		Cells    []json.RawMessage `json:"cells"`
+		Metadata map[string]any    `json:"metadata"`
+		Major    *int              `json:"nbformat"`
+		Minor    *int              `json:"nbformat_minor"`
+	}
+	dec := json.NewDecoder(bytes.NewReader(data))
+	if err := dec.Decode(&nb); err != nil || dec.More() {
+		return syscall.EINVAL
+	}
+	if nb.Cells == nil || nb.Metadata == nil || nb.Major == nil || *nb.Major != 4 || nb.Minor == nil || *nb.Minor < 0 {
+		return syscall.EINVAL
+	}
+	for _, c := range nb.Cells {
+		var cell struct {
+			Type string `json:"cell_type"`
+		}
+		if json.Unmarshal(c, &cell) != nil || (cell.Type != "code" && cell.Type != "markdown" && cell.Type != "raw") {
+			return syscall.EINVAL
+		}
+	}
+	return nil
+}
+
 type parUpload struct {
 	transport *parTransport
 	url       parURL
@@ -48,7 +92,7 @@ func (w *parWriter) Refresh(ctx context.Context, t writeback.Target) (writeback.
 	if err != nil {
 		return nil, err
 	}
-	m, err := w.reader.parMetadataRequest(ctx, w.transport, rel, "REFRESH", "", 0)
+	m, err := w.reader.parMetadataRequestKind(ctx, w.transport, rel, "REFRESH", "", 0, w.objectKind())
 	if err != nil {
 		return nil, err
 	}
@@ -59,7 +103,7 @@ func (w *parWriter) Complete(ctx context.Context, t writeback.Target, tag string
 	if err != nil {
 		return err
 	}
-	_, err = w.reader.parMetadataRequest(ctx, w.transport, rel, "UPDATE", tag, size)
+	_, err = w.reader.parMetadataRequestKind(ctx, w.transport, rel, "UPDATE", tag, size, w.objectKind())
 	return err
 }
 func (w *parWriter) Verify(ctx context.Context, t writeback.Target, tag string, expected []byte) error {
@@ -67,7 +111,7 @@ func (w *parWriter) Verify(ctx context.Context, t writeback.Target, tag string, 
 	if err != nil {
 		return err
 	}
-	m, err := w.reader.parMetadataRequest(ctx, w.transport, rel, "DOWNLOAD", "", 0)
+	m, err := w.reader.parMetadataRequestKind(ctx, w.transport, rel, "DOWNLOAD", "", 0, w.objectKind())
 	if err != nil {
 		return err
 	}
@@ -86,8 +130,9 @@ func (w *parWriter) Verify(ctx context.Context, t writeback.Target, tag string, 
 
 var _ writeback.Remote = (*parWriter)(nil)
 
-// OpenExperimentalBuffer prepares an existing regular FILE for the write-enabled
-// mount. It rejects Notebook objects and pins the initial storage version.
+// OpenExperimentalBuffer prepares an existing regular FILE or Notebook for the
+// write-enabled mount and pins the initial storage version. A Notebook is
+// exposed as its raw stored .ipynb bytes, not the contents API JSON.
 func (r *Reader) OpenExperimentalBuffer(ctx context.Context, rel, region string, journal *recovery.Store) (*writeback.Buffer, error) {
 	if journal == nil || rel == "" {
 		return nil, syscall.EINVAL
@@ -100,14 +145,14 @@ func (r *Reader) OpenExperimentalBuffer(ctx context.Context, rel, region string,
 	if err != nil {
 		return nil, err
 	}
-	if kind != backend.File {
+	if kind != backend.File && kind != backend.Notebook {
 		return nil, syscall.EOPNOTSUPP
 	}
 	transport, err := newOCIParTransport(region)
 	if err != nil {
 		return nil, err
 	}
-	meta, err := r.parMetadataRequest(ctx, transport, rel, "DOWNLOAD", "", 0)
+	meta, err := r.parMetadataRequestKind(ctx, transport, rel, "DOWNLOAD", "", 0, kind)
 	if err != nil {
 		return nil, err
 	}
@@ -121,7 +166,7 @@ func (r *Reader) OpenExperimentalBuffer(ctx context.Context, rel, region string,
 	if int64(len(data)) != *meta.Size {
 		return nil, syscall.ESTALE
 	}
-	return writeback.NewBuffer(writeback.Target{PlatformID: r.platformID, WorkspaceKey: r.workspaceKey, RemotePath: remote}, meta.ETag, data, journal, &parWriter{reader: r, transport: transport})
+	return writeback.NewBuffer(writeback.Target{PlatformID: r.platformID, WorkspaceKey: r.workspaceKey, RemotePath: remote}, meta.ETag, data, journal, &parWriter{reader: r, transport: transport, kind: kind})
 }
 
 // Snapshot fetches a version-bound normal-file snapshot for recovery diagnosis.
@@ -135,10 +180,10 @@ func (w *parWriter) Snapshot(ctx context.Context, t writeback.Target) (writeback
 	if err != nil {
 		return writeback.Snapshot{}, err
 	}
-	if kind != backend.File {
+	if kind != backend.File && kind != backend.Notebook {
 		return writeback.Snapshot{}, syscall.EOPNOTSUPP
 	}
-	meta, err := w.reader.parMetadataRequest(ctx, w.transport, rel, "DOWNLOAD", "", 0)
+	meta, err := w.reader.parMetadataRequestKind(ctx, w.transport, rel, "DOWNLOAD", "", 0, kind)
 	if err != nil {
 		return writeback.Snapshot{}, err
 	}

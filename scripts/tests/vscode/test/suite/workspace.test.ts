@@ -83,4 +83,37 @@ suite('AIDPFS mounted workspace', () => {
     await vscode.workspace.fs.delete(renamed);
     await assert.rejects(() => Promise.resolve(vscode.workspace.fs.stat(renamed)));
   });
+
+  test('open, edit, save and reopen a Notebook', async function () {
+    const nbRel = process.env.AIDPFS_E2E_NOTEBOOK;
+    if (!nbRel || nbRel.includes('/')) {
+      this.skip();
+      return;
+    }
+    const nbUri = vscode.Uri.file(path.join(root, nbRel));
+    const notebook = await vscode.workspace.openNotebookDocument(nbUri);
+    await vscode.window.showNotebookDocument(notebook);
+    assert.strictEqual(notebook.notebookType, 'jupyter-notebook');
+    assert.strictEqual(notebook.cellCount, 2);
+    const cell = notebook.cellAt(1).document;
+    assert.ok(cell.getText().includes('aidpfs-vscode-notebook-seed'));
+
+    const edit = new vscode.WorkspaceEdit();
+    edit.insert(cell.uri, new vscode.Position(cell.lineCount, 0), '\n# aidpfs-vscode-notebook-saved');
+    assert.ok(await vscode.workspace.applyEdit(edit));
+    assert.strictEqual(notebook.isDirty, true);
+    assert.ok(await notebook.save(), 'Notebook save should succeed on the write mount');
+    assert.strictEqual(notebook.isDirty, false);
+
+    const raw = JSON.parse(await fs.readFile(nbUri.fsPath, 'utf8'));
+    const source = ([] as string[]).concat(raw.cells[1].source).join('');
+    assert.ok(source.includes('aidpfs-vscode-notebook-saved'), 'saved bytes should contain the edit');
+    assert.strictEqual(raw.metadata.aidpfs_marker, 'vscode-seed', 'notebook metadata should be preserved');
+
+    await vscode.commands.executeCommand('workbench.action.closeActiveEditor');
+    const reopened = await vscode.workspace.openNotebookDocument(nbUri);
+    assert.ok(reopened.cellAt(1).document.getText().includes('aidpfs-vscode-notebook-saved'));
+    await assert.rejects(() => Promise.resolve(vscode.workspace.fs.delete(nbUri)),
+      'Notebook deletion stays unsupported');
+  });
 });

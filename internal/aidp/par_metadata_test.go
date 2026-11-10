@@ -11,6 +11,8 @@ import (
 	"sync/atomic"
 	"syscall"
 	"testing"
+
+	"aidpfs/internal/backend"
 )
 
 func TestPARMetadataRefreshAndUpdate(t *testing.T) {
@@ -72,5 +74,28 @@ func TestPARMetadataDoesNotRetryAmbiguousPost(t *testing.T) {
 	_, e := r.parMetadataRequest(context.Background(), p, "file", "REFRESH", "", 0)
 	if !errors.Is(e, ErrOutcomeUnknown) || calls.Load() != 1 {
 		t.Fatalf("calls %d err %v", calls.Load(), e)
+	}
+}
+
+func TestPARMetadataNotebookType(t *testing.T) {
+	storage := httptest.NewTLSServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	defer storage.Close()
+	p, _ := newPARTransport(storage.URL, storage.Client())
+	var types []string
+	r := serverReader(t, func(w http.ResponseWriter, req *http.Request) {
+		types = append(types, req.Header.Get("type"))
+		fmt.Fprintf(w, `{"parUrl":%q,"eTag":"etag","size":2}`, storage.URL+"/p/x")
+	})
+	if _, e := r.parMetadataRequestKind(context.Background(), p, "n.ipynb", "DOWNLOAD", "", 0, backend.Notebook); e != nil {
+		t.Fatal(e)
+	}
+	if _, e := r.parMetadataRequest(context.Background(), p, "f.txt", "DOWNLOAD", "", 0); e != nil {
+		t.Fatal(e)
+	}
+	if _, e := r.parMetadataRequestKind(context.Background(), p, "d", "DOWNLOAD", "", 0, backend.Directory); !errors.Is(e, syscall.EINVAL) {
+		t.Fatalf("directory kind: %v", e)
+	}
+	if strings.Join(types, ",") != "NOTEBOOK,FILE" {
+		t.Fatalf("types = %v", types)
 	}
 }

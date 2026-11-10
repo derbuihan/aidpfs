@@ -32,7 +32,7 @@ func run() error {
 	flag.StringVar(&c.RemotePath, "remote-path", "", "absolute workspace subtree")
 	flag.StringVar(&c.MountPoint, "mount-point", "", "absolute local mount directory")
 	showVersion := flag.Bool("version", false, "print version")
-	writeEnabled := flag.Bool("write", false, "enable single-writer FILE writes, limited rename and unlink")
+	writeEnabled := flag.Bool("write", false, "enable single-writer FILE and Notebook writes, limited FILE rename and unlink")
 	recoveryDir := flag.String("recovery-dir", "", "existing private recovery directory (required with --write)")
 	flag.Parse()
 	if *showVersion {
@@ -77,7 +77,7 @@ func run() error {
 				return verifiedMutation(ctx, r, op, src, dst)
 			})
 		}
-		writeMount, err = mount.MountWithMutations(context.Background(), c.MountPoint, r, func(ctx context.Context, rel string) (*writeback.Buffer, error) {
+		writeMount, err = mount.MountWithMutations(context.Background(), c.MountPoint, r.WithRawNotebooks(c.Region), func(ctx context.Context, rel string) (*writeback.Buffer, error) {
 			return r.OpenExperimentalBuffer(ctx, rel, c.Region, store)
 		}, func(ctx context.Context, rel string) error {
 			return journalCreate(ctx, store, c, rel, "FILE", r.CreateEmptyExperimental)

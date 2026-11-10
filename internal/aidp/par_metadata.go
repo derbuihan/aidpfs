@@ -11,6 +11,7 @@ import (
 	"syscall"
 	"time"
 
+	"aidpfs/internal/backend"
 	"aidpfs/internal/config"
 )
 
@@ -24,6 +25,22 @@ type parMetadata struct {
 // capability; UPDATE changes metadata. Neither operation is automatically retried.
 // The caller must reconcile unknown outcomes and protect its recovery data.
 func (r *Reader) parMetadataRequest(ctx context.Context, transport *parTransport, rel, action, etag string, size int64) (parMetadata, error) {
+	return r.parMetadataRequestKind(ctx, transport, rel, action, etag, size, backend.File)
+}
+
+// parMetadataRequestKind is parMetadataRequest for a FILE or NOTEBOOK object.
+// The tested tenant serves a Notebook's raw .ipynb bytes through the same
+// PAR protocol, including conditional If-Match uploads (HTTP 412 on a stale
+// version, also after contents API or Workbench saves).
+func (r *Reader) parMetadataRequestKind(ctx context.Context, transport *parTransport, rel, action, etag string, size int64, kind backend.Kind) (parMetadata, error) {
+	objType := "FILE"
+	switch kind {
+	case backend.File:
+	case backend.Notebook:
+		objType = "NOTEBOOK"
+	default:
+		return parMetadata{}, syscall.EINVAL
+	}
 	if transport == nil || (action != "DOWNLOAD" && action != "REFRESH" && action != "UPDATE") {
 		return parMetadata{}, syscall.EINVAL
 	}
@@ -59,7 +76,7 @@ func (r *Reader) parMetadataRequest(ctx context.Context, transport *parTransport
 	}
 	req.Header.Set("Date", time.Now().UTC().Format(http.TimeFormat))
 	req.Header.Set("path", remote)
-	req.Header.Set("type", "FILE")
+	req.Header.Set("type", objType)
 	req.Header.Set("should-update-recent", "false")
 	// OCI signs content-type even for a bodyless POST. It must be present
 	// on the wire with the same value that the signer included.
