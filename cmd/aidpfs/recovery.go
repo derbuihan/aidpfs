@@ -149,7 +149,7 @@ func runRecovery(args []string, out io.Writer) error {
 				return syscall.EIO
 			}
 		}
-		fmt.Fprintf(out, "confirmed=%t observation=%s (point-in-time; no create replayed)\n", selected.Confirmed, observation)
+		fmt.Fprintf(out, "confirmed=%t rejected=%t observation=%s (point-in-time; no create replayed)\n", selected.Confirmed, selected.Rejected, observation)
 		return nil
 	case "inspect-mutation":
 		if *id == "" || *region == "" || *output != "" {

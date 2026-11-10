@@ -276,16 +276,21 @@ type content struct {
 }
 
 // contentQuery returns the contents query for a fetch. The tested tenant
-// infers the type of an extension-less FILE (for example Makefile) from its
-// name: content=0 reports it as a directory and content=1 fails with HTTP 400
-// unless type=file is given. Listed FILEs therefore ask for that type.
+// infers the type from the name unless it is given: an extension-less FILE
+// (Makefile) is reported as a directory, with content=1 failing with HTTP 400,
+// and a FOLDER containing a dot (.git, v1.2) is reported as a file. Listed
+// FILEs and FOLDERs therefore ask for their type explicitly; notebooks keep
+// the inferred type.
 func contentQuery(include bool, listedKind backend.Kind) url.Values {
 	q := url.Values{"content": {"0"}}
 	if include {
 		q.Set("content", "1")
 	}
-	if listedKind == backend.File {
+	switch listedKind {
+	case backend.File:
 		q.Set("type", "file")
+	case backend.Directory:
+		q.Set("type", "directory")
 	}
 	return q
 }

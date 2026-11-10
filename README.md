@@ -56,9 +56,10 @@ Unmount in a second terminal with `fusermount3 -u "$HOME/aidp-mount"`, or stop t
 - `stat` fetches file contents to report the size actually returned. API responses larger than 64 MiB fail with `EFBIG`, so binary file size limits depend on the encoded response. This approach can use substantial memory and API requests.
 - Notebooks are exposed read-only as the JSON content returned by the contents API. Rich Notebook PUT/export tests showed normalized cell source, metadata/output representation changes, and PAR JSON differing from contents JSON. A Workbench UI test reproduced periodic autosave overwriting an external REST update without conflict detection; Notebook writes remain disabled. Preservation of every existing Notebook field has not been established.
 - In the tested tenancy, creation and rename targets accept only ASCII letters, digits, `_`, `.`, `+`, `-`, `@` and space; Japanese and other non-ASCII letters, `#`, `%`, `(`, `~` and similar characters return `400 InvalidParameter`. The write mount rejects such new names locally with `EINVAL` before any request. Existing objects are listed and read under their remote names.
-- The tested contents API infers the type of a FILE from its extension: without `type=file`, an extension-less FILE such as `Makefile` is reported as a directory and its content request fails with HTTP 400. aidpfs requests `type=file` for every FILE listed by the objects API.
+- The tested contents API infers an object's type from its name unless the type is given: an extension-less FILE such as `Makefile` is reported as a directory (its content request fails with HTTP 400), and a FOLDER whose name contains a dot such as `.git` or `v1.2` is reported as a file. aidpfs passes `type=file` or `type=directory` for every FILE or FOLDER listed by the objects API.
 - Unsupported object types cause directory listing to fail, rather than being silently hidden. The `objects` and contents APIs do not have identical path behavior; only the tested `/Workspace` subtree is known to work. Directory listing, permissions, and paths may differ across AIDP deployments.
-- GET requests alone are retried for selected transient failures. The default mount does not use PAR. The sandbox AIDP/VS Code FILE E2E is verified, while multi-user access, other AIDP deployments, and large-file workloads are not. The Vim and Git checks do not cover ordinary editor settings or full Git workflows.
+- GET requests alone are retried for selected transient failures. The default mount does not use PAR. The sandbox AIDP/VS Code FILE E2E is verified, while multi-user access, other AIDP deployments, and large-file workloads are not. The Vim check does not cover ordinary editor settings.
+- Git works with the work tree on the mount and the repository outside it (`git --git-dir /local/repo.git --work-tree /mount/dir`): `status`, `diff`, `add`, `commit`, `checkout -- FILE`, `mv` and `rm` were tested on the write mount. A repository stored inside the mount is not supported: `git init` fails because Git calls `chmod` on lock files and later replaces files by renaming lock files over them.
 
 ## FILE writes
 
@@ -72,7 +73,7 @@ The implementation has a 64 MiB file limit and keeps each open file in memory. D
 
 | Operation | Result | Contract |
 |---|---|---|
-| Create regular FILE / mkdir | Supported, no overwrite | A durable local intent precedes one remote request. Inspect after an uncertain result before retrying. |
+| Create regular FILE / mkdir | Supported, no overwrite | A durable local intent precedes one remote request. A definite rejection such as an existing path (`EEXIST`) resolves the intent; inspect after an uncertain result before retrying. |
 | Open existing FILE for write; write/truncate/append | Supported | Changes use a bounded local buffer and journal; conflicts preserve recoverable data. |
 | `fsync` / synchronous write | Supported | Returns success after conditional PAR transfer, metadata completion and version/content verification. |
 | `flush` | Supported | Each writable flush attempts the same save path and returns its error. |

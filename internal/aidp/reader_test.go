@@ -393,3 +393,23 @@ func TestListedFileContentRequestsFileType(t *testing.T) {
 		t.Fatalf("notebook ReadFile: %v", err)
 	}
 }
+
+// The tested tenant reports a FOLDER whose name contains a dot (.git, v1.2) as
+// a file unless type=directory is requested.
+func TestListedDirectoryRequestsDirectoryType(t *testing.T) {
+	r := serverReader(t, func(w http.ResponseWriter, req *http.Request) {
+		if strings.HasSuffix(req.URL.Path, "/objects") {
+			fmt.Fprint(w, `{"items":[{"displayName":".git","path":"/Workspace/.git","type":"FOLDER"}]}`)
+			return
+		}
+		if req.URL.Query().Get("type") == "directory" {
+			fmt.Fprint(w, `{"name":".git","path":"Workspace/.git","type":"directory"}`)
+			return
+		}
+		fmt.Fprint(w, `{"name":".git","path":"Workspace/.git","type":"file"}`)
+	})
+	st, err := r.Stat(context.Background(), ".git")
+	if err != nil || st.Kind != backend.Directory {
+		t.Fatalf("Stat = %+v, %v", st, err)
+	}
+}

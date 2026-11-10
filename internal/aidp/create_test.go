@@ -8,6 +8,8 @@ import (
 	"sync/atomic"
 	"syscall"
 	"testing"
+
+	"aidpfs/internal/backend"
 )
 
 func TestCreateEmptyExperimentalSingleAttempt(t *testing.T) {
@@ -33,6 +35,10 @@ func TestCreateEmptyExperimentalSingleAttempt(t *testing.T) {
 			err = reader.CreateEmptyExperimental(context.Background(), "f")
 			if !errors.Is(err, tc.want) {
 				t.Fatalf("error: %v", err)
+			}
+			var rejected *backend.NotAppliedError
+			if want := tc.status == 409 || tc.status == 403; errors.As(err, &rejected) != want {
+				t.Fatalf("not applied = %t, want %t (%v)", !want, want, err)
 			}
 			if calls.Load() != 1 {
 				t.Fatalf("attempts: %d", calls.Load())

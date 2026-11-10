@@ -178,6 +178,12 @@ func journalCreate(ctx context.Context, store *recovery.Store, c config.Config, 
 		return err
 	}
 	if err = create(ctx, rel); err != nil {
+		var rejected *backend.NotAppliedError
+		if errors.As(err, &rejected) {
+			if rerr := store.RejectCreate(intentID); rerr != nil {
+				return errors.Join(rejected.Err, rerr)
+			}
+		}
 		return err
 	}
 	return store.ConfirmCreate(intentID)
@@ -215,7 +221,7 @@ func checkRecoveryAfterUnmount(pending int, journal *recovery.Store) error {
 	}
 	unknown := 0
 	for _, intent := range intents {
-		if intent.Invalid || !intent.Confirmed {
+		if intent.Invalid || (!intent.Confirmed && !intent.Rejected) {
 			unknown++
 		}
 	}

@@ -170,6 +170,40 @@ def main():
             parts.append(f'{child[len(path):] or "."}:{kind}:GET={st}:{shown}')
         return '[' + ', '.join(parts) + ']'
 
+    def start_mount(rec):
+        """Mount the probe root with --write; returns (process, mountpoint)."""
+        import subprocess
+        import tempfile
+        mnt = tempfile.mkdtemp(prefix='aidpfs-mnt-')
+        proc = subprocess.Popen([a.mount_binary, '--profile', a.profile, '--region', a.region,
+                                 '--platform-id', plats[0]['id'], '--workspace-key', wkey,
+                                 '--remote-path', root, '--mount-point', mnt, '--write', '--recovery-dir', rec],
+                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        for _ in range(100):
+            if os.path.ismount(mnt):
+                return proc, mnt
+            if proc.poll() is not None:
+                raise RuntimeError('mount exited: ' + proc.stdout.read()[-500:])
+            time.sleep(0.2)
+        proc.kill()
+        raise RuntimeError('mount timeout')
+
+    def stop_mount(proc, mnt, lazy=False):
+        import subprocess
+        subprocess.run(['fusermount3', '-u'] + (['-z'] if lazy else []) + [mnt], check=False, capture_output=True)
+        try:
+            out, _ = proc.communicate(timeout=30)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            out, _ = proc.communicate()
+        for _ in range(50):
+            if not os.path.ismount(mnt):
+                break
+            time.sleep(0.2)
+        if not os.path.ismount(mnt):
+            os.rmdir(mnt)
+        return proc.returncode, (out or '').strip()
+
     def record(name, ok, detail=''):
         results.append((name, ok, detail))
         log(f'RESULT {name}: {"OK" if ok else "UNEXPECTED"} {detail}')
@@ -315,6 +349,197 @@ def main():
                     record('I create ' + n, True, 'accepted')
                 except RuntimeError as e:
                     record('I create ' + n, True, 'rejected ' + str(e))
+
+        # R. Representative Git operations on a write mount.
+        if 'R' in a.cases:
+            log('R git')
+            import subprocess
+            import tempfile
+            if not a.mount_binary:
+                raise RuntimeError('case R requires --mount-binary')
+            rec = tempfile.mkdtemp(prefix='aidpfs-rec-')
+            os.chmod(rec, 0o700)
+            proc, mnt = start_mount(rec)
+            env = dict(os.environ, GIT_CONFIG_NOSYSTEM='1', GIT_CONFIG_GLOBAL='/dev/null', GIT_TERMINAL_PROMPT='0')
+            ident = ['-c', 'user.name=aidpfs probe', '-c', 'user.email=aidpfs-probe@example.invalid',
+                     '-c', 'commit.gpgsign=false', '-c', 'core.hooksPath=/dev/null']
+            def run(args, cwd):
+                r = subprocess.run(args, cwd=cwd, env=env, capture_output=True, timeout=120)
+                return r.returncode, (r.stdout + r.stderr).decode(errors='replace').strip().replace('\n', ' | ')[:300]
+            try:
+                wt = os.path.join(mnt, 'wt')
+                os.mkdir(wt)
+                os.mkdir(os.path.join(wt, 'sub'))
+                for n, data in [('a.txt', b'alpha\n'), ('Makefile', b'all:\n'), ('sub/b.txt', b'beta\n')]:
+                    with open(os.path.join(wt, n), 'wb') as f:
+                        f.write(data)
+                        f.flush()
+                        os.fsync(f.fileno())
+                with tempfile.TemporaryDirectory(prefix='aidpfs-gitdir-') as gd:
+                    run(['git', 'init', '--bare', '--quiet', gd], '/')
+                    g = lambda *x: run(['git', '--git-dir', gd, '--work-tree', wt] + ident + list(x), wt)
+                    record('R add+commit', g('add', '-A')[0] == 0 and g('commit', '-q', '-m', 'init')[0] == 0, g('log', '--oneline')[1])
+                    with open(os.path.join(wt, 'a.txt'), 'wb') as f:
+                        f.write(b'changed\n')
+                        f.flush()
+                        os.fsync(f.fileno())
+                    code, out = g('diff', '--stat')
+                    record('R diff sees change', code == 0 and 'a.txt' in out, out)
+                    code, out = g('checkout', '--', 'a.txt')
+                    st, body = read(root + '/wt/a.txt')
+                    record('R checkout restores file', code == 0 and body == b'alpha\n', f'code={code} api={st}/{body!r} out={out}')
+                    code, out = g('mv', 'a.txt', 'sub/c.txt')
+                    record('R git mv', code == 0 and read(root + '/wt/sub/c.txt')[1] == b'alpha\n' and read(root + '/wt/a.txt')[0] == 404, f'code={code} out={out}')
+                    code, out = g('rm', '-q', 'sub/b.txt')
+                    record('R git rm', code == 0 and (root + '/wt/sub/b.txt') not in listing(root + '/wt/sub'), f'code={code} out={out}')
+                    code, out = g('commit', '-q', '-m', 'move and remove')
+                    s2 = g('status', '--porcelain')
+                    record('R commit and clean status', code == 0 and s2 == (0, ''), f'code={code} status={s2}')
+                    code, out = g('stash', 'list')
+                    record('R stash list', code == 0, out)
+                # Repository stored inside the mount: Git replaces files through
+                # lockfile renames, which the mount does not support.
+                repo = os.path.join(mnt, 'repo')
+                os.mkdir(repo)
+                code, out = run(['git', 'init', '-q'], repo)
+                record('R in-mount git init', True, f'code={code} out={out}')
+                if code == 0:
+                    with open(os.path.join(repo, 'f.txt'), 'wb') as f:
+                        f.write(b'x\n')
+                    code, out = run(['git'] + ident + ['add', 'f.txt'], repo)
+                    record('R in-mount git add', True, f'code={code} out={out}')
+                    code, out = run(['git'] + ident + ['commit', '-q', '-m', 'x'], repo)
+                    record('R in-mount git commit', True, f'code={code} out={out}')
+                # The mount must still accept work after these failures.
+                with open(os.path.join(mnt, 'after-git.txt'), 'wb') as f:
+                    f.write(b'ok')
+                    f.flush()
+                    os.fsync(f.fileno())
+                record('R mount usable afterwards', read(root + '/after-git.txt')[1] == b'ok', '')
+            finally:
+                code, out = stop_mount(proc, mnt)
+                record('R unmount', True, f'code={code} output={out[-300:]!r} recovery={sorted(os.listdir(rec))}')
+
+        # T. Children of dot-named folders, created right after the parent.
+        if 'T' in a.cases:
+            log('T dot folders')
+            for parent in ['.hidden', 'visible', '.git']:
+                pp = root + '/' + parent
+                create(pp, 'FOLDER')
+                for child, kind in [('info', 'FOLDER'), ('HEAD', 'FILE'), ('x.txt', 'FILE')]:
+                    cp = pp + '/' + child
+                    h = {'path': cp.encode(), 'type': kind, 'is-overwrite': 'false', 'Content-Type': 'application/octet-stream'}
+                    r = req(f'create {parent}/{child}', 'POST', base + '/objects', headers=h, data=b'')
+                    if r.status_code in (200, 201):
+                        (owned_folders.append(cp) if kind == 'FOLDER' else owned_files.add(cp))
+                    lst = listing(pp)
+                    record(f'T {parent}/{child} {kind}', True, f'status={r.status_code} listed={cp in lst}')
+                r = req(f'dup create {parent}', 'POST', base + '/objects', headers={'path': pp.encode(), 'type': 'FOLDER', 'is-overwrite': 'false', 'Content-Type': 'application/octet-stream'}, data=b'')
+                record(f'T duplicate mkdir {parent}', True, f'status={r.status_code}')
+
+        # U. contents GET metadata for folders with dotted names.
+        if 'U' in a.cases:
+            log('U folder GET by name shape')
+            for n in ['.git', '.hidden', 'dir.d', 'v1.2', 'plain']:
+                pp = root + '/' + n
+                create(pp, 'FOLDER')
+                for q in ({'content': 0}, {'content': 0, 'type': 'directory'}):
+                    r = req(f'GET {n} {q}', 'GET', contents_url(pp), params=q)
+                    j = r.json() if r.ok else {}
+                    record(f'U {n} {q}', True, f'status={r.status_code} type={j.get("type")}')
+
+        # S. Diagnose an in-mount git init.
+        if 'S' in a.cases:
+            log('S in-mount git init diagnosis')
+            import subprocess
+            import tempfile
+            rec = tempfile.mkdtemp(prefix='aidpfs-rec-')
+            os.chmod(rec, 0o700)
+            proc, mnt = start_mount(rec)
+            try:
+                repo = os.path.join(mnt, 'repo')
+                os.mkdir(repo)
+                env = dict(os.environ, GIT_CONFIG_NOSYSTEM='1', GIT_CONFIG_GLOBAL='/dev/null', GIT_TRACE='1')
+                r = subprocess.run(['strace', '-f', '-e', 'trace=%file', '-o', '/tmp/git-init.strace', 'git', 'init', '-q'], cwd=repo, env=env, capture_output=True, timeout=120) \
+                    if subprocess.run(['which', 'strace'], capture_output=True).returncode == 0 else \
+                    subprocess.run(['git', 'init', '-q'], cwd=repo, env=env, capture_output=True, timeout=120)
+                log('git init rc', r.returncode, (r.stdout + r.stderr).decode(errors='replace')[-800:])
+                if os.path.exists('/tmp/git-init.strace'):
+                    lines = [l for l in open('/tmp/git-init.strace') if '/repo' in l and ('= -1' in l)]
+                    log('failed syscalls:')
+                    for l in lines[:40]:
+                        log('   ', l.strip().replace(mnt, '<mnt>')[:200])
+                for name, kind in sorted(tree(root + '/repo').items()):
+                    log('  remote', kind, name.replace(root, '<root>'))
+                lr = subprocess.run([a.mount_binary, 'recovery', 'list', '--dir', rec], capture_output=True, text=True, timeout=60)
+                log('recovery list:', lr.stdout.replace(root, '<root>')[-1500:], lr.stderr[-300:])
+            finally:
+                code, out = stop_mount(proc, mnt)
+                record('S unmount', True, f'code={code} output={out[-300:]!r}')
+
+        # K. Process stop after a rename intent is durable.
+        if 'K' in a.cases:
+            log('K kill during rename')
+            import signal as sig
+            import subprocess
+            import tempfile
+            import threading
+            if not a.mount_binary:
+                raise RuntimeError('case K requires --mount-binary')
+            outcomes = []
+            for rnd in range(a.race_rounds):
+                src, dst = root + f'/kill{rnd}.txt', root + f'/kill{rnd}-renamed.txt'
+                create(src, 'FILE', f'aidpfs-kill-{rnd}'.encode())
+                rec = tempfile.mkdtemp(prefix='aidpfs-rec-')
+                os.chmod(rec, 0o700)
+                proc, mnt = start_mount(rec)
+                os.stat(os.path.join(mnt, f'kill{rnd}.txt'))
+                result = {}
+                def do_rename():
+                    try:
+                        os.rename(os.path.join(mnt, f'kill{rnd}.txt'), os.path.join(mnt, f'kill{rnd}-renamed.txt'))
+                        result['errno'] = 0
+                    except OSError as e:
+                        result['errno'] = e.errno
+                t = threading.Thread(target=do_rename, daemon=True)
+                t.start()
+                killed_after_intent = False
+                for _ in range(2000):
+                    if any(n.startswith('mutation-') and n.endswith('.json') for n in os.listdir(rec)):
+                        proc.send_signal(sig.SIGKILL)
+                        killed_after_intent = True
+                        break
+                    if not t.is_alive():
+                        break
+                    time.sleep(0.001)
+                if not killed_after_intent:
+                    proc.send_signal(sig.SIGKILL)
+                t.join(timeout=30)
+                code, _ = stop_mount(proc, mnt, lazy=True)
+                time.sleep(3)
+                lst = listing(root)
+                where = 'source' if src in lst else ('destination' if dst in lst else 'missing')
+                if where == 'destination':
+                    moved(src, dst)
+                files = sorted(os.listdir(rec))
+                lr = subprocess.run([a.mount_binary, 'recovery', 'list', '--dir', rec], capture_output=True, text=True, timeout=60)
+                ids = [n[len('mutation-'):-len('.json')] for n in files if n.startswith('mutation-') and n.endswith('.json')]
+                insp = ''
+                if ids:
+                    ir = subprocess.run([a.mount_binary, 'recovery', 'inspect-mutation', '--dir', rec, '--id', ids[0],
+                                         '--region', a.region, '--profile', a.profile], capture_output=True, text=True, timeout=60)
+                    insp = (ir.stdout + ir.stderr).strip()
+                # A new mount must refuse a non-empty recovery directory.
+                p2 = subprocess.run([a.mount_binary, '--profile', a.profile, '--region', a.region,
+                                     '--platform-id', plats[0]['id'], '--workspace-key', wkey, '--remote-path', root,
+                                     '--mount-point', tempfile.mkdtemp(prefix='aidpfs-mnt-'), '--write', '--recovery-dir', rec],
+                                    capture_output=True, text=True, timeout=60)
+                done_marker = any(n.endswith('.done') for n in files)
+                record(f'K round {rnd}', killed_after_intent and bool(ids) and not done_marker and p2.returncode != 0,
+                       f'killed_after_intent={killed_after_intent} rename_errno={result.get("errno")} remote={where} '
+                       f'journal={files} list_rc={lr.returncode} inspect={insp[-250:]!r} remount_rc={p2.returncode} remount_msg={(p2.stdout + p2.stderr).strip()[-150:]!r}')
+                outcomes.append(where)
+            record('K remote outcomes', True, str(outcomes))
 
         # M. Real aidpfs --write mount of the probe root.
         if 'M' in a.cases:

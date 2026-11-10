@@ -132,3 +132,37 @@ func TestVerifiedMutationPreReadFailureIsNotApplied(t *testing.T) {
 		t.Fatalf("error=%v calls=%d", err, f.calls)
 	}
 }
+
+func TestJournalCreateRecordsDefiniteRejection(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.Chmod(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	store, err := recovery.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := config.Config{PlatformID: "p", WorkspaceKey: "w", RemotePath: "/Workspace"}
+	err = journalCreate(context.Background(), store, c, ".git", "FOLDER", func(context.Context, string) error {
+		return backend.NotApplied(syscall.EEXIST)
+	})
+	if !errors.Is(err, syscall.EEXIST) {
+		t.Fatalf("error = %v", err)
+	}
+	items, err := store.ListCreates()
+	if err != nil || len(items) != 1 || !items[0].Rejected || items[0].Confirmed || items[0].Invalid {
+		t.Fatalf("intent=%+v error=%v", items, err)
+	}
+	if err = checkRecoveryAfterUnmount(0, store); err != nil {
+		t.Fatalf("rejected create requires recovery: %v", err)
+	}
+	// An unknown outcome still requires recovery.
+	if err = journalCreate(context.Background(), store, c, "f", "FILE", func(context.Context, string) error {
+		return aidp.ErrOutcomeUnknown
+	}); !errors.Is(err, aidp.ErrOutcomeUnknown) {
+		t.Fatalf("error = %v", err)
+	}
+	if err = checkRecoveryAfterUnmount(0, store); err == nil {
+		t.Fatal("unknown create did not require recovery")
+	}
+}

@@ -14,6 +14,8 @@ import (
 
 // CreateIntent records an intended non-overwriting remote file creation.
 // Confirmed means the server returned success; it does not prove the file still exists.
+// Rejected means the request was definitely not applied (rejected by the server
+// or never sent), so nothing was created.
 type CreateIntent struct {
 	ID           string `json:"id"`
 	PlatformID   string `json:"platform_id"`
@@ -21,6 +23,7 @@ type CreateIntent struct {
 	RemotePath   string `json:"remote_path"`
 	Kind         string `json:"kind,omitempty"`
 	Confirmed    bool   `json:"confirmed"`
+	Rejected     bool   `json:"rejected"`
 	Invalid      bool   `json:"invalid"`
 }
 
@@ -56,14 +59,19 @@ func (s *Store) BeginCreateKind(platform, workspace, remote, kind string) (strin
 }
 
 // ConfirmCreate records only the receipt of a successful create response.
-func (s *Store) ConfirmCreate(id string) error {
+func (s *Store) ConfirmCreate(id string) error { return s.resolveCreate(id, "confirmed\n") }
+
+// RejectCreate records that a create request was definitely not applied.
+func (s *Store) RejectCreate(id string) error { return s.resolveCreate(id, "rejected\n") }
+
+func (s *Store) resolveCreate(id, marker string) error {
 	if !validID.MatchString(id) {
 		return errors.New("invalid create intent id")
 	}
 	if _, err := readFile(filepath.Join(s.dir, "create-"+id+".json"), 64<<10); err != nil {
 		return err
 	}
-	if err := writeNew(filepath.Join(s.dir, "create-"+id+".done"), []byte("confirmed\n")); err != nil {
+	if err := writeNew(filepath.Join(s.dir, "create-"+id+".done"), []byte(marker)); err != nil {
 		return err
 	}
 	return syncDir(s.dir)
@@ -89,13 +97,16 @@ func (s *Store) ListCreates() ([]CreateIntent, error) {
 		raw, e := readFile(filepath.Join(s.dir, name), 64<<10)
 		if e == nil {
 			var r CreateIntent
-			if json.Unmarshal(raw, &r) == nil && r.ID == id && !r.Confirmed && !r.Invalid && (r.Kind == "" || r.Kind == "FILE" || r.Kind == "FOLDER") && validIdentity(r.PlatformID) && validIdentity(r.WorkspaceKey) && strings.HasPrefix(r.RemotePath, "/") && path.Clean(r.RemotePath) == r.RemotePath && r.RemotePath != "/" && !strings.ContainsRune(r.RemotePath, '\x00') {
+			if json.Unmarshal(raw, &r) == nil && r.ID == id && !r.Confirmed && !r.Rejected && !r.Invalid && (r.Kind == "" || r.Kind == "FILE" || r.Kind == "FOLDER") && validIdentity(r.PlatformID) && validIdentity(r.WorkspaceKey) && strings.HasPrefix(r.RemotePath, "/") && path.Clean(r.RemotePath) == r.RemotePath && r.RemotePath != "/" && !strings.ContainsRune(r.RemotePath, '\x00') {
 				item = r
 				marker, markErr := readFile(filepath.Join(s.dir, "create-"+id+".done"), 32)
 				if markErr == nil {
-					if string(marker) == "confirmed\n" {
+					switch string(marker) {
+					case "confirmed\n":
 						item.Confirmed = true
-					} else {
+					case "rejected\n":
+						item.Rejected = true
+					default:
 						item.Invalid = true
 					}
 				} else if !os.IsNotExist(markErr) {
