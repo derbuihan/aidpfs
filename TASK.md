@@ -96,8 +96,8 @@ Oracle AI Data Platform (AIDP) Workbench の workspace をローカルから操�
 ### 11. 必須: Notebook 保存経路と競合境界を確定
 
 - [x] **API資料と追加実測**: 2026-11-02、contents GET/PUTの`hash=1`・誤`if-match`、2-chunk Notebook PUT、Notebook `downloadFileMeta` / `uploadFileMeta(REFRESH/UPDATE)`、PAR conditional PUTを調査。GET hash/ETagなし、誤if-match PUTは200、chunked更新は通常PUTと同じ正規化後NotebookNodeを返し、Notebook PARの古い競合writerは412となり先行内容を保持した。[詳細](docs/20261102_Notebook書き込み再調査.md)。
-- [ ] **表現のlossless基準**: contents GET、export ipynb、Notebook download PAR raw bytes、Workbenchで保存・再openした結果を、code/markdown source、cell順序とID、metadata、outputs、attachments、widgets、未知fieldごとに比較する。書込み用の正準表現と意味的同一性の判定基準を決める。内容・PAR URLはログに残さない。
-- [ ] **chunk protocolの境界**: Notebook chunked create/updateの実request構造、chunk終端・順序・欠落・重複・SHA不一致・中断後再開・サイズ上限をsynthetic Notebookで検証し、POST/PUTどちらが新規作成・上書きに適するか決める。通常PUTで作成競合時の挙動も確認する。
+- [ ] **表現のlossless基準**: 2026-11-10 にAPI側を実測（Workbench保存・再openとの比較は未了）。empty/markdown/code/mixed/rich（attachments、4種のoutputs、execution_count、cell/notebook metadata、widgets、cell・notebook・top-levelの未知field、日本語）の合成Notebookで、**PAR書込み→PAR読戻しは全件byte一致**。contents GETはcode cellの`metadata.trusted`追加と複数行文字列の表記（文字列/行配列）以外は一致、exportは表記差のみで一致。contents PUTの保存bytesは`indent=1`・key順ソートのJSONで表記差のみ。**書込みの正準表現はPAR raw `.ipynb` bytes**とし、意味的同一性は「nbformatの複数行表記を正規化し、contents GETの`trusted`を除いて一致」と定める。[詳細](docs/20261110_Notebook表現とPAR競合.md)。
+- [x] **chunk protocolの境界**: 2026-11-10、書込み経路をPARに決めたため、contents PUTのchunk転送は採用しない（Notebook作成はcontents PUTの空Notebook、内容はPAR）。2-chunk成功の先行実測のみ残し、異常系の境界試験は実施しない。採用を再検討する場合は[再開時の実測マトリクス](docs/20261103_Notebookロスレスとchunk境界調査.md)を使う。
 - [ ] **WorkbenchとPARの競合**: NotebookをWorkbenchで未保存のまま開き、別clientのNotebook PAR conditional save後に周期autosaveする試験を行い、API GET・Workbench表示・PAR versionの三者を照合する。逆順、同時PAR writer、同一・別principalの可能な範囲を試し、UIがCAS/lockを尊重するか結論を記録する。権限変更や別principal作成はこの試験の前提にしない。
 - [ ] **保存契約**: 実測に基づき、単一writer条件、Workbench等の非協調writerによる残存競合、fsync成功条件、競合errno、未知結果journal/manual recovery、Notebook作成・rename・deleteの対応範囲を定義する。Notebook書込み必須要件を満たす最小機能と、保証できない挙動をREADME/TASKに記載する。
 
